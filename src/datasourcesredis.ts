@@ -59,11 +59,12 @@ export class DataSourcesRedis {
     // TODO: tester createAndSave
     const voteCode = randomstring.generate(12) // REVIEW: nanoId ???
     // console.log(voteCode)
+    console.log("addVote voteInput", voteInput)
     const currentDate = new Date
     const vote: Entity = await voteRepository.save({ ...voteInput, voteCode: voteCode, date: currentDate.toString() })
-    // console.table(vote)
-    // console.log('entityId: ', vote[entityId])
-    // console.log('entityKeyName: ', vote[EntityKeyName])
+    console.table(vote)
+    console.log('addVote entityId: ', vote[EntityId])
+    console.log('addVote entityKeyName: ', vote[EntityKeyName])
     // const exists = await redisClient.exists(`vote:${vote[EntityId]}`)
     const exists = await redisClient.exists(vote[EntityKeyName])
     if (exists) {
@@ -267,7 +268,7 @@ export class DataSourcesRedis {
       // console.log("userVoted.uid", userVoted)
       // console.log( "campaignId", JSON.parse(JSON.stringify(userVoted[0].campaignId)))
       // console.log("Symbol(entityId)", userVoted['Symbol(EntityId)'])
-      console.log("EntityKeyName", userVoted[EntityKeyName])
+      // console.log("getVoted EntityKeyName", userVoted[EntityKeyName])
       return []
     } else {
       // console.log("getVoted userVoted[0].campaignIds", JSON.parse(JSON.stringify(userVoted[0].campaignIds)))
@@ -371,12 +372,12 @@ export class DataSourcesRedis {
     return true
   }
 
-  // Documentation....
+
   async incrUser(uid: string, sats: number): Promise<Boolean> {
     try {
       // console.log(userId)
       // increments sats for User
-      const satsUser: Entity[] = await satsUserRepository.search().where('userId').equals(uid).return.all()
+      const satsUser: Entity[] = await satsUserRepository.search().where('uid').equals(uid).return.all()
       // console.log(satsUser)
       if (satsUser.length == 0) {
         // console.log("user empty")

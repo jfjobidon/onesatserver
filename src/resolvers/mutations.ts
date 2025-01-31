@@ -158,8 +158,8 @@ const mutations: MutationResolvers = {
     // signup: async (_, { userInput }): Promise<UserMutationResponse> => {
   favoriteElement: async (_, {favoriteInput}): Promise<FavoriteElementMutationResponse> => {
     // add/remove elementId in user.isfavorite
-    console.log("favoriteElement: ", favoriteInput.uid, favoriteInput.elementId, favoriteInput.isFavorite)
-    console.log("favoriteElement")
+    // console.log("favoriteElement: ", favoriteInput.uid, favoriteInput.elementId, favoriteInput.isFavorite)
+    // console.log("favoriteElement")
     const favoriteResponse = await dataSourcesMongo.favoriteElement({...favoriteInput})
     return favoriteResponse
     // return {
@@ -207,9 +207,8 @@ const mutations: MutationResolvers = {
   },
 
   createPoll: async (_, { pollInput }, context): Promise<PollMutationResponse> => {
-    console.log("create poll")
-    console.log(context)
-    // TODO: FIXME: enable context and get authorId from context.userId
+    // console.log("create poll")
+    // console.log(context)
     let pollMutationResponse = await dataSourcesMongo.createPoll(pollInput)
     // console.log("createPoll return: ", pollMutationResponse)
     return pollMutationResponse
@@ -255,8 +254,8 @@ const mutations: MutationResolvers = {
       console.log("VOTE IS VALID")
       // possibility to filter publish: withFilter
       let voteResponse = await dataSourcesRedis.addVote(voteInput)
-      // console.log("addVote voteResponse")
-      // console.table(voteResponse)
+      console.log("addVote voteResponse")
+      console.table(voteResponse)
       pubsub.publish('EVENT_VOTEADDED', { voteAdded: voteResponse.vote })
       return voteResponse
     } else {

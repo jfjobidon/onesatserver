@@ -252,9 +252,6 @@ export class DataSourcesMongo {
     // if campaignType === ALL --> returns all database !!!
     // console.log("getCampaigns uid", uid)
     // console.log("getCampaigns campaignType", campaignType)
-    if (!uid) { // FIXME: uid hardcoded
-      uid = "000000000000000000000000"
-    }
 
     switch (campaignType) {
       case 'USER':
@@ -295,7 +292,7 @@ export class DataSourcesMongo {
             return null
           } else {
             for (const favorite of favorites) {
-              console.log("favorite", favorite)
+              // console.log("favorite", favorite)
               const campaign = await this.getCampaign(favorite)
               const isFavorite = true // obviously
               const isVoted = voteds.includes(favorite)
@@ -520,8 +517,6 @@ export class DataSourcesMongo {
   }
 
   async getPollOption(pollOptionId: string): Promise<PollOption> {
-    console.log("in getPollOption: FIXME: uid hardcoded")
-    // const pollOption = await prisma.pollOption.findUnique({ where: { pollId: pollOptionId}})
     const pollOption: PollOptionMongo = await prisma.pollOption.findUnique({ where: { id: pollOptionId}})
     // console.log(pollOption)
     const sats = await dataSourcesRedis.getSatsForPollOption(pollOptionId)
@@ -746,6 +741,7 @@ export class DataSourcesMongo {
   }
 
   // createPollOption(context.userId, pollOptionInput)
+  // FIXME: REVIEW: remove authorId
   async createPollOption(authorId: String, pollOptionInput: PollOptionInput): Promise<PollOptionMutationResponse> {
      const pollId = pollOptionInput.pollId
      try {
