@@ -21,6 +21,15 @@ export const voteSchema = new Schema('vote', {
   dataStructure: 'HASH'
 })
 
+export const activitySchema = new Schema('activity', {
+  type: { type: 'string' },
+  uid: { type: 'string' },
+  description: { type: 'string' },
+  date: { type: 'string' }
+}, {
+  dataStructure: 'HASH'
+})
+
 export const userVotedSchema = new Schema('userVoted', {
   uid: { type: 'string' },
   campaignIds: { type: 'string[]', path: '$.userVoted.campaignIds[*]' }

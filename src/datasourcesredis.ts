@@ -14,7 +14,8 @@ const osovId = "859058920934" // TODO: put that in config file FIXME: REVIEW:
 import randomstring from "randomstring"
 
 import { Vote, VoteInput, AddVoteMutationResponse, GetVotesQueryResponse } from "./__generated__/resolvers-types"
-import { userVotedSchema, voteSchema, satsPollOptionSchema, votesPollOptionSchema, viewsPollOptionSchema, satsPollSchema, votesPollSchema, viewsPollSchema, satsCampaignSchema, votesCampaignSchema, viewsCampaignSchema, satsUserSchema } from './schema.redis.js'
+import { userVotedSchema, voteSchema, satsPollOptionSchema, votesPollOptionSchema, viewsPollOptionSchema, satsPollSchema, votesPollSchema, viewsPollSchema, satsCampaignSchema, votesCampaignSchema, viewsCampaignSchema, satsUserSchema, activitySchema } from './schema.redis.js'
+import { UUID } from 'graphql-scalars/typings/mocks'
 
 let voteRepository = new Repository(voteSchema, redisClient)
 // await voteRepository.dropIndex()
@@ -22,6 +23,9 @@ await voteRepository.createIndex()  // required to use search (RediSearch)
 
 let satsPollOptionRepository = new Repository(satsPollOptionSchema, redisClient)
 await satsPollOptionRepository.createIndex()
+
+let activitiesRepository = new Repository(activitySchema, redisClient)
+await activitiesRepository.createIndex()
 
 let votesPollOptionRepository = new Repository(votesPollOptionSchema, redisClient)
 await votesPollOptionRepository.createIndex()
@@ -89,6 +93,33 @@ export class DataSourcesRedis {
         vote: null
       }
     }
+  }
+
+  // type: { type: 'string' },  // 1: createCamapign, 2: createPoll, 3: createPollOption, 4: startCampaign, 5: endCampaign, 6: archiveCampaign, 7: pauseCampaign, 8: resumeCampaign, 9: approvisionner, 10: retirer
+  // uid: { type: 'string' },
+  // description: { type: 'string' },
+  // date: { type: 'string' }
+  // TODO: cronjob to show all the votes, views and sats for the day, favorites, etc.
+  // create user
+  // user login
+  // authenticate email
+  // create campaing
+  // create poll
+  // create pollOption
+  // start campaing (owner + favorites)
+  // end campaing (owner + favorites)
+  // archive campaing (owner)
+  // pause campaing (owner)
+  // resume campaing (owner)
+  // favorite campaing
+  // unfavorite campaing
+  // vote by user
+  // win sats ??!!??  // TODO: deactivate verbose: no logs
+  // approvisionner compte en sats
+  // retirer sats
+  async logActivity(uid: string, description: string): Promise<void> {
+    const activity: Entity = await activitiesRepository.save({ type: "log", uid: uid,  description: description, date: new Date().toString() })
+    console.log(activity)
   }
 
   async incrPollOption(pollOptionId: string, sats: number): Promise<Boolean> {
