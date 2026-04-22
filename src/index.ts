@@ -59,13 +59,16 @@ const DateScalar = new GraphQLScalarType({
   },
 });
 
+import { verifyToken } from './firebase.js'
 import resolvers from "./resolvers/index.js";
 
 const typeDefs = readFileSync('schema.graphql', { encoding: 'utf-8' }); // REVIEW: Error message (callback fct)
 
 interface MyContext {
-  roles?: string;
   userId?: string;
+  roles?: string[];
+  isAuthenticated: boolean;
+  isAppToken?: boolean;
 }
 
 let schema = makeExecutableSchema({ typeDefs, resolvers });
@@ -121,32 +124,23 @@ app.use(
   expressMiddleware(
     server,
     {
-      context: async ({ req }) => ({
-        roles: req.headers.roles,
-        userId: req.headers.userId
-      })
-      // context: async ({ req }) => {
-      //   // get the user token from the headers
-      //   const token = req.headers.authorization || '';
-    
-      //   // try to retrieve a user with the token
-      //   const user = getUser(token);
-    
-      //   // optionally block the user
-      //   // we could also check user roles/permissions here
-      //   if (!user)
-      //     // throwing a `GraphQLError` here allows us to specify an HTTP status code,
-      //     // standard `Error`s will have a 500 status code by default
-      //     throw new GraphQLError('User is not authenticated', {
-      //       extensions: {
-      //         code: 'UNAUTHENTICATED',
-      //         http: { status: 401 },
-      //       },
-      //     });
-    
-      //   // add the user to the context
-      //   return { user };
-      // },
+      context: async ({ req }): Promise<MyContext> => {
+        const decodedToken = await verifyToken(req.headers.authorization as string | undefined)
+
+        if (!decodedToken) {
+          return { isAuthenticated: false }
+        }
+
+        const operationName = req.body?.operationName ?? 'anonymous'
+        console.log(`[${operationName}] uid=${decodedToken.uid} email=${decodedToken.email ?? 'n/a'}`)
+
+        return {
+          userId: decodedToken.uid,
+          roles: decodedToken.roles ?? [],
+          isAuthenticated: true,
+          isAppToken: decodedToken.isAppToken ?? false,
+        }
+      },
     })
 );
 

@@ -5,6 +5,7 @@
   "type": "module",
   "main": "index.js",
   "scripts": {
+    "doc": "jsdoc -r .",
     "prisma": "prisma generate",
     "generate": "graphql-codegen --config codegen.yml",
     "compile": "npm run generate && tsc",
@@ -24,6 +25,7 @@
     "cors": "^2.8.5",
     "dotenv": "^16.3.1",
     "express": "^4.18.2",
+    "firebase-admin": "^13.7.0",
     "graphql": "^16.8.1",
     "graphql-middleware": "^6.1.35",
     "graphql-scalars": "^1.22.4",
@@ -46,8 +48,10 @@
     "@types/jsonwebtoken": "^9.0.3",
     "@types/node": "^22.8.6",
     "concurrently": "^8.2.2",
+    "jsdoc": "^4.0.4",
     "nodemon": "^3.0.1",
     "prisma": "^5.22.0",
+    "tmp": "^0.2.5",
     "typescript": "^5.2.2"
   }
 }

@@ -12,5 +12,6 @@
     "blindAmount": false,
     "blindRank": false,
     "blindVote": false,
-    "allowMultipleVotes": false
+    "allowMultipleVotes": false,
+    "FIREBASE_SERVICE_ACCOUNT_PATH": "./firebase-service-account.json"
 }
