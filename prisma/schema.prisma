@@ -15,8 +15,7 @@ generator client {
 // TODO: get url from config
 datasource db {
   provider = "mongodb"
-  url      = "mongodb+srv://osovAdmin:rRTGwNDL7a@cluster0.3t8mxys.mongodb.net/onesatonevote"
-  // url = env("DBURI") // TODO: DEBUG:
+  url      = env("DATABASE_URL")
 }
 
 // REVIEW: not compatible with graphql
@@ -45,7 +44,8 @@ model Campaign {
   blindRank           Boolean
   blindVote           Boolean
   allowMultipleVotes  Boolean
-  paused              Boolean  @default(false) // REVIEW: how to get the variable from config file ?
+  paused              Boolean  @default(false) // emergency pause only
+  status              String   @default("draft") // draft, ready, published, ended
   polls               Poll[]
   // updatedAt DateTime @updatedAt
   // xyz      String @unique @default(uuid())
