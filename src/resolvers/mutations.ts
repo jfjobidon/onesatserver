@@ -206,6 +206,11 @@ const mutations: MutationResolvers = {
     return {...campaign}
   },
 
+  publishCampaign: async (_, { campaignId }, context): Promise<CampaignMutationResponse> => {
+    let result = await dataSourcesMongo.publishCampaign(campaignId)
+    return {...result}
+  },
+
   createPoll: async (_, { pollInput }, context): Promise<PollMutationResponse> => {
     // console.log("create poll")
     // console.log(context)

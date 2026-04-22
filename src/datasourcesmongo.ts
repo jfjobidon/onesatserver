@@ -598,6 +598,7 @@ export class DataSourcesMongo {
                   startingDate: startingDate,
                   endingDate: endingDate,
                   paused: campaignPausedDefault,
+                  status: "draft",
                   isPrivate: isPrivate,
                   blindAmount: blindAmount,
                   blindRank: blindRank,
@@ -628,6 +629,7 @@ export class DataSourcesMongo {
           maxSatPerVote: maxSatPerVote,
           suggestedSatPerVote: suggestedSatPerVote,
           paused: campaignPausedDefault,
+          status: "draft",
           blindAmount: blindAmount,
           blindRank: blindRank,
           blindVote: blindVote,
@@ -641,6 +643,75 @@ export class DataSourcesMongo {
       }
     } catch (err) {
       console.log("err", err)
+      return {
+        code: "500",
+        success: false,
+        message: "Error creating campaign: " + (err as Error).message,
+        campaign: null
+      }
+    }
+  }
+
+  async publishCampaign(campaignId: string): Promise<CampaignMutationResponse> {
+    console.log("publishCampaign campaignId", campaignId)
+    try {
+      // Get campaign with polls and poll options
+      const campaign = await prisma.campaign.findUnique({
+        where: { id: campaignId },
+        include: { polls: { include: { pollOptions: true } } }
+      })
+      if (!campaign) {
+        return { code: "404", success: false, message: "Campaign not found", campaign: null }
+      }
+      // Check readiness: at least 1 poll, each with at least 2 options
+      if (campaign.polls.length === 0) {
+        return { code: "400", success: false, message: "Campaign needs at least 1 poll", campaign: null }
+      }
+      const incompletePoll = campaign.polls.find(p => p.pollOptions.length < 2)
+      if (incompletePoll) {
+        return { code: "400", success: false, message: `Poll "${incompletePoll.title}" needs at least 2 options`, campaign: null }
+      }
+      // Publish
+      const updated = await prisma.campaign.update({
+        where: { id: campaignId },
+        data: { status: "published", updatedDate: new Date() }  // CampaignStatus.PUBLISHED
+      })
+      return {
+        code: "200",
+        success: true,
+        message: "Campaign published!",
+        campaign: {
+          id: updated.id,
+          authorId: updated.authorId,
+          title: updated.title,
+          description: updated.description,
+          startingDate: updated.startingDate,
+          endingDate: updated.endingDate,
+          message: updated.message,
+          minSatPerVote: updated.minSatPerVote,
+          maxSatPerVote: updated.maxSatPerVote,
+          suggestedSatPerVote: updated.suggestedSatPerVote,
+          paused: updated.paused,
+          status: updated.status,
+          blindAmount: updated.blindAmount,
+          blindRank: updated.blindRank,
+          blindVote: updated.blindVote,
+          allowMultipleVotes: updated.allowMultipleVotes,
+          creationDate: updated.creationDate,
+          updatedDate: updated.updatedDate,
+          sats: 0,
+          votes: 0,
+          views: 0
+        }
+      }
+    } catch (err) {
+      console.log("publishCampaign err", err)
+      return {
+        code: "500",
+        success: false,
+        message: "Error publishing campaign: " + (err as Error).message,
+        campaign: null
+      }
     }
   }
 

@@ -240,6 +240,12 @@ export class DataSourcesRedis {
     return sats
   }
 
+  async getSatsBalance(uid: string): Promise<number> {
+    const satsUser: Entity[] = await satsUserRepository.search().where('uid').equals(uid).return.all()
+    if (satsUser.length == 0) return 0
+    return parseInt((satsUser[0].sats).toString())
+  }
+
   async getNbVotesForCampaign(campaignId: string): Promise<number> {
     const voteCampaign: Entity[] = await votesCampaignRepository.search().where('campaignId').equals(campaignId).return.all()
     let nbVotes: number
@@ -286,6 +292,12 @@ export class DataSourcesRedis {
     return nbViews
   }
 
+  // https://jsdoc.app/tags-type
+  /**
+   * retreive all campaignIds for which the user has voted
+   * @param {string} uid - id of the current user
+   * @returns {[string]} - array of campaign ids
+  */
   async getVoted(uid: string): Promise<string[]> {
     // const exists = await redisClient.exists('userVoted:01JCHC08V5WGZ5X633XP1H64Y3')
     //   console.log("exists: ", exists)
@@ -451,6 +463,16 @@ export class DataSourcesRedis {
 
     let votesResponse: Vote[] = allVotes.map(x => Object(x)) // convert [Entity] to [Vote]  // REVIEW: send [Entity]
     // https://github.com/redis/redis-om-node/blob/main/README.md
+    return { votes: votesResponse }
+  }
+
+  async getUserVotesForCampaign(campaignId: string, uid: string): Promise<GetVotesQueryResponse> {
+    let allVotes: Entity[]
+    allVotes = await voteRepository.search()
+      .where('campaignId').equals(campaignId)
+      .and('uid').equals(uid)
+      .return.all()
+    let votesResponse: Vote[] = allVotes.map(x => Object(x))
     return { votes: votesResponse }
   }
 

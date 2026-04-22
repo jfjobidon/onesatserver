@@ -81,6 +81,10 @@ const queries: QueryResolvers = {
     return userName
   },
 
+  getSatsBalance: async (_, args) => {
+    return await dataSourcesRedis.getSatsBalance(args.uid)
+  },
+
   getFavorites: async (_, args): Promise<GetFavoritesQueryResponse> => {
     // add/remove elementId in user.isfavorite
     console.log("getFavorites uid: ", args)
@@ -235,6 +239,10 @@ const queries: QueryResolvers = {
   getVotesForCampaign: async (_, {campaignId, uid}) => {
     // console.log("getVotesForCampaign from client")
     return await dataSourcesRedis.getVotesForCampaign(campaignId, uid)
+  },
+
+  getUserVotesForCampaign: async (_, {campaignId, uid}) => {
+    return dataSourcesRedis.getUserVotesForCampaign(campaignId, uid)
   },
   
   getVotesForPoll: async (_, {pollId, uid}) => {

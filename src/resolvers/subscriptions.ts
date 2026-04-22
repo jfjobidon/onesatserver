@@ -65,21 +65,12 @@ const subscriptions: SubscriptionResolvers = {
     //   },
 
     voteAdded : {
-        // subscribe: () => pubsub.asyncIterator(['EVENT_VOTEADDED'])
         // https://github.com/apollographql/apollo-server/issues/4556
         subscribe: () => ({
             [Symbol.asyncIterator]:  withFilter(
-                (_, args) => pubsub.asyncIterator('EVENT_VOTEADDED'),
-                // (_, args) => pubsub.asyncIterator(['EVENT_VOTEADDED']),
-                // (_, args) => pubsub.asyncIterator<{ campaignId: string }>(['EVENT_VOTEADDED']),
-                // () => pubsub.asyncIterator(['EVENT_VOTEADDED']),
-                (payload, variables, context, info) => {
-                    console.table(payload);
-                    console.table(variables);
-                    console.table(context);
-                    console.table(info);
-                    return true;
-                }
+                () => pubsub.asyncIterator('EVENT_VOTEADDED'),
+                // campaignId is a required subscription variable (enforced by the schema)
+                (payload, variables) => payload?.voteAdded?.campaignId === variables.campaignId
               )
             }
         ),

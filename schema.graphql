@@ -181,6 +181,9 @@ type getVotedQueryResponse {
   voted: [String]!
 }
 
+# isFavorite: Boolean // REVIEW: remove from campaign type: user specific
+# isVoted: Boolean    // REVIEW: remove from campaign type: user specific
+# NOTE: we can get all user votes for the campaign only if isVoted is true ???
 type Campaign {
   id: String!
   authorId: String!
@@ -200,6 +203,7 @@ type Campaign {
   blindVote: Boolean
   allowMultipleVotes: Boolean
   paused: Boolean
+  status: String
   isFavorite: Boolean
   isVoted: Boolean
   sats: Int
@@ -226,6 +230,7 @@ type CampaignAll {
   blindVote: Boolean
   allowMultipleVotes: Boolean
   paused: Boolean
+  status: String
   sats: Int!
   votes: Int!
   views: Int!
@@ -337,9 +342,11 @@ type Query {
   getVotesForPoll(pollId: String! = "", uid: String): getVotesQueryResponse
   getVotesForPollOption(pollOptionId: String!): getVotesQueryResponse
   getVotesForUser(uid: String): getVotesQueryResponse
+  getUserVotesForCampaign(campaignId: String!, uid: String): getVotesQueryResponse
   getUsers: [User]
   getUserById(id: String): User
   getUserName(uid: String): String
+  getSatsBalance(uid: String!): Int
   getUserByUserName(userName: String): User
   getUserByEmail(email: String): User
   getPollOption(id: String): PollOption
@@ -369,9 +376,10 @@ type Mutation {
   accountFunding(fundingInput: FundingInput): FundingMutationResponse
   togglePauseCampaign(pauseCampaignInput: PauseCampaignInput): pauseMutationResponse
   togglePausePoll(pausePollInput: PausePollInput): pauseMutationResponse
+  publishCampaign(campaignId: String!): CampaignMutationResponse
 }
 
 type Subscription {
   newsFeed: NewsEvent
-  voteAdded(campaignId: String): Vote
+  voteAdded(campaignId: String!): Vote
 }
