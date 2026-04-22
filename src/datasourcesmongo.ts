@@ -292,8 +292,9 @@ export class DataSourcesMongo {
             return null
           } else {
             for (const favorite of favorites) {
-              // console.log("favorite", favorite)
               const campaign = await this.getCampaign(favorite)
+              // Skip deleted campaigns that are still referenced in the user's favorites
+              if (!campaign || !campaign.id) continue
               const isFavorite = true // obviously
               const isVoted = voteds.includes(favorite)
               const sats = await dataSourcesRedis.getSatsForCampaign(favorite)
