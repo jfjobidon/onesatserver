@@ -785,6 +785,20 @@ export class DataSourcesMongo {
       }
     }
 
+    // Privacy / voting subordination: a poll can strengthen, never relax.
+    if (currentCampaign.blindAmount && !pollInput.blindAmount) {
+      return { code: "400", success: false, message: "Blind Amount is enforced by the campaign and cannot be disabled at the poll level", poll: null }
+    }
+    if (currentCampaign.blindRank && !pollInput.blindRank) {
+      return { code: "400", success: false, message: "Blind Rank is enforced by the campaign and cannot be disabled at the poll level", poll: null }
+    }
+    if (currentCampaign.blindVote && !pollInput.blindVote) {
+      return { code: "400", success: false, message: "Anonymous Voting is enforced by the campaign and cannot be disabled at the poll level", poll: null }
+    }
+    if (!currentCampaign.allowMultipleVotes && pollInput.allowMultipleVotes) {
+      return { code: "400", success: false, message: "Multiple votes are restricted by the campaign and cannot be enabled at the poll level", poll: null }
+    }
+
     const minSatPerVote = pollInput.minSatPerVote || minSatPerVoteDefault
     const maxSatPerVote = pollInput.maxSatPerVote || maxSatPerVoteDefault
     const suggestedSatPerVote = pollInput.suggestedSatPerVote || suggestedSatPerVoteDefault
