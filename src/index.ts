@@ -16,6 +16,8 @@ import { readFileSync } from 'fs';
 
 import { applyMiddleware } from 'graphql-middleware'
 import { permissions } from './permissions.js';
+import { STATUS_CRON_ENABLED } from './config/AppConfig.js';
+import { startCampaignStatusCron } from './jobs/campaignStatusCron.js';
 
 import 'dotenv/config'
 import config from "config";
@@ -146,3 +148,9 @@ app.use(
 
 await new Promise<void>((resolve) => httpServer.listen({ port: PORT }, resolve));
 console.log(`🚀 Server ready at http://localhost:${PORT}/`);
+
+if (STATUS_CRON_ENABLED) {
+  startCampaignStatusCron();
+} else {
+  console.log('[statusCron] disabled (set STATUS_CRON_ENABLED=true in src/config/AppConfig.ts to enable)');
+}
