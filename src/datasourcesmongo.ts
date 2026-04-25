@@ -48,6 +48,7 @@ const allowMultipleVotesDefault = config.get<string>('allowMultipleVotes')
 // NOTE: Campaign prisma !== Campaign graphQL
 import { Campaign as CampaignMongo, Poll as PollMongo, PollOption as PollOptionMongo, User as UserMongo, PrismaClient } from '@prisma/client'
 import { DataSourcesRedis } from "./datasourcesredis.js"
+import { validateSatsMax, validateSatsMin } from "./utils/satsBounds.js"
 // import { CampaignType } from "./utils/types"
 const dataSourcesRedis = new DataSourcesRedis()
 // import { describe } from "node:test"
@@ -57,23 +58,11 @@ const prisma = new PrismaClient()
 
 export class DataSourcesMongo {
 
-  async accountFunding(userId: string, fundingInput: FundingInput): Promise<FundingMutationResponse> {
+  async accountFunding(uid: string, fundingInput: FundingInput): Promise<FundingMutationResponse> {
     try {
-      let amountSat = fundingInput.sats
-      
-      // TODO: FIXME: put new sats in redis
-      // const result1 = await prisma.user.update({
-      //   where: {
-      //     id: userId
-      //   },
-      //   data: {
-      //     sats: {increment: amountSat}
-      //   }
-      // })
-
       const result = await prisma.user.update({
         where: {
-          id: userId
+          uid: uid
         },
         data: {
           fundings: {
@@ -91,12 +80,13 @@ export class DataSourcesMongo {
           fundings: true
         }
       })
+      await dataSourcesRedis.incrUser(uid, fundingInput.sats)
       return {
         code: "200",
         success: true,
         message: "funding done",
         funding: {
-          userId: userId,
+          userId: uid,
           invoice: fundingInput.invoice,
           sats: fundingInput.sats,
           date: result.creationDate
@@ -104,6 +94,12 @@ export class DataSourcesMongo {
       }
     } catch(err) {
       console.log(err)
+      return {
+        code: "500",
+        success: false,
+        message: (err as Error)?.message || "funding failed",
+        funding: null
+      }
     }
   }
 
@@ -557,6 +553,20 @@ export class DataSourcesMongo {
     console.log(campaignInput)
     let authorId = campaignInput.authorId
 
+    const minErr = validateSatsMin('Minimum', campaignInput.minSatPerVote)
+    if (minErr) return { code: "400", success: false, message: minErr, campaign: null }
+    const maxErr = validateSatsMax('Maximum', campaignInput.maxSatPerVote)
+    if (maxErr) return { code: "400", success: false, message: maxErr, campaign: null }
+    const suggestedErr = validateSatsMax('Suggested', campaignInput.suggestedSatPerVote)
+    if (suggestedErr) return { code: "400", success: false, message: suggestedErr, campaign: null }
+    if (campaignInput.minSatPerVote! > campaignInput.maxSatPerVote!) {
+      return { code: "400", success: false, message: "Minimum sats per vote must be ≤ maximum", campaign: null }
+    }
+    const sug = campaignInput.suggestedSatPerVote!, lo = campaignInput.minSatPerVote!, hi = campaignInput.maxSatPerVote!
+    if (sug < lo || sug > hi) {
+      return { code: "400", success: false, message: `Suggested sats per vote must be between ${lo} and ${hi}`, campaign: null }
+    }
+
     const minSatPerVote = campaignInput.minSatPerVote || minSatPerVoteDefault
     const maxSatPerVote = campaignInput.maxSatPerVote || maxSatPerVoteDefault
     const suggestedSatPerVote = campaignInput.suggestedSatPerVote || suggestedSatPerVoteDefault
@@ -719,6 +729,21 @@ export class DataSourcesMongo {
   async createPoll( pollInput: PollInput): Promise<PollMutationResponse> {
     const campaignId = pollInput.campaignId
     const authorId = pollInput.authorId
+
+    const minErr = validateSatsMin('Minimum', pollInput.minSatPerVote)
+    if (minErr) return { code: "400", success: false, message: minErr, poll: null }
+    const maxErr = validateSatsMax('Maximum', pollInput.maxSatPerVote)
+    if (maxErr) return { code: "400", success: false, message: maxErr, poll: null }
+    const suggestedErr = validateSatsMax('Suggested', pollInput.suggestedSatPerVote)
+    if (suggestedErr) return { code: "400", success: false, message: suggestedErr, poll: null }
+    if (pollInput.minSatPerVote! > pollInput.maxSatPerVote!) {
+      return { code: "400", success: false, message: "Minimum sats per vote must be ≤ maximum", poll: null }
+    }
+    const sug = pollInput.suggestedSatPerVote!, lo = pollInput.minSatPerVote!, hi = pollInput.maxSatPerVote!
+    if (sug < lo || sug > hi) {
+      return { code: "400", success: false, message: `Suggested sats per vote must be between ${lo} and ${hi}`, poll: null }
+    }
+
     const minSatPerVote = pollInput.minSatPerVote || minSatPerVoteDefault
     const maxSatPerVote = pollInput.maxSatPerVote || maxSatPerVoteDefault
     const suggestedSatPerVote = pollInput.suggestedSatPerVote || suggestedSatPerVoteDefault

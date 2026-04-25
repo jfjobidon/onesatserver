@@ -25,6 +25,7 @@ const dataSourcesRedis = new DataSourcesRedis()
 import { DataSourcesMongo } from '../datasourcesmongo.js'
 const dataSourcesMongo = new DataSourcesMongo()
 import { responseObject } from '../utils/types'
+import { MAX_SATS_PER_VOTE_CEILING } from '../config/AppConfig.js'
 import randomstring from "randomstring"
 
 // check addVote authorisation for user
@@ -83,6 +84,11 @@ const validateVote = async (voteInput: VoteInput): Promise<responseObject> => {
       console.log(response.message)
       response.success = false
       response.code = 400
+    } else if (voteInputSats > MAX_SATS_PER_VOTE_CEILING) {
+      response.message = `vote cannot exceed ${MAX_SATS_PER_VOTE_CEILING.toLocaleString()} sats (1 BTC)`
+      console.log(response.message)
+      response.success = false
+      response.code = 400
     } else {
       // console.log("enough sats")
       let campaign = await dataSourcesMongo.getCampaign(voteInput.campaignId)
@@ -138,7 +144,19 @@ const validateVote = async (voteInput: VoteInput): Promise<responseObject> => {
                   response.success = false
                   response.code = 400
                 } else {
-                  console.log(response.message)
+                  // 9) check if double vote (allowMultipleVotes)
+                  if (poll.allowMultipleVotes === false) {
+                    const userVotesOnPoll = await dataSourcesRedis.getVotesForPoll(
+                      voteInput.pollId,
+                      voteInput.uid,
+                    )
+                    if (userVotesOnPoll.votes && userVotesOnPoll.votes.length > 0) {
+                      response.message = "You have already voted on this poll"
+                      console.log(response.message)
+                      response.success = false
+                      response.code = 403
+                    }
+                  }
                 }
               }
             }
@@ -249,12 +267,10 @@ const mutations: MutationResolvers = {
   // addVote: async (_, vote: VoteInput, { dataSources }): Promise<AddVoteMutationResponse>  => {
   addVote: async (_, { voteInput }): Promise<AddVoteMutationResponse> => {
     console.log("addVote async mutations...")
-    // let responseObject = await validateVote(voteInput)
-    let responseObject = {  // TODO: DEBUG: REVIEW: delete this object
-      success: true,
-      code: 200,
-      message: "ok"
+    if (!voteInput) {
+      return { code: 400, success: false, message: "voteInput is required", vote: null }
     }
+    let responseObject = await validateVote(voteInput)
     if (responseObject.success) {
       console.log("VOTE IS VALID")
       // possibility to filter publish: withFilter
