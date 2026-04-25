@@ -49,6 +49,7 @@ const allowMultipleVotesDefault = config.get<string>('allowMultipleVotes')
 import { Campaign as CampaignMongo, Poll as PollMongo, PollOption as PollOptionMongo, User as UserMongo, PrismaClient } from '@prisma/client'
 import { DataSourcesRedis } from "./datasourcesredis.js"
 import { validateSatsMax, validateSatsMin } from "./utils/satsBounds.js"
+import { validateTitle, validateDescription, normalizeText } from "./utils/textBounds.js"
 // import { CampaignType } from "./utils/types"
 const dataSourcesRedis = new DataSourcesRedis()
 // import { describe } from "node:test"
@@ -553,6 +554,13 @@ export class DataSourcesMongo {
     console.log(campaignInput)
     let authorId = campaignInput.authorId
 
+    const titleErr = validateTitle(campaignInput.title)
+    if (titleErr) return { code: "400", success: false, message: titleErr, campaign: null }
+    const descErr = validateDescription(campaignInput.description)
+    if (descErr) return { code: "400", success: false, message: descErr, campaign: null }
+    const title = normalizeText(campaignInput.title)
+    const description = normalizeText(campaignInput.description)
+
     const minErr = validateSatsMin('Minimum', campaignInput.minSatPerVote)
     if (minErr) return { code: "400", success: false, message: minErr, campaign: null }
     const maxErr = validateSatsMax('Maximum', campaignInput.maxSatPerVote)
@@ -599,8 +607,8 @@ export class DataSourcesMongo {
             createMany: {
               data: [
                 {
-                  title: campaignInput.title,
-                  description: campaignInput.description,
+                  title: title,
+                  description: description,
                   minSatPerVote: minSatPerVote,
                   maxSatPerVote: maxSatPerVote,
                   suggestedSatPerVote: suggestedSatPerVote,
@@ -631,8 +639,8 @@ export class DataSourcesMongo {
         campaign: {
           id: result.campaigns[result.campaigns.length - 1].id, // REVIEW: new created campaign allways last ?
           authorId: authorId,
-          title: campaignInput.title,
-          description: campaignInput.description,
+          title: title,
+          description: description,
           startingDate: startingDate,
           endingDate: endingDate,
           message: null,
@@ -730,6 +738,20 @@ export class DataSourcesMongo {
     const campaignId = pollInput.campaignId
     const authorId = pollInput.authorId
 
+    const titleErr = validateTitle(pollInput.title)
+    if (titleErr) return { code: "400", success: false, message: titleErr, poll: null }
+    const descErr = validateDescription(pollInput.description)
+    if (descErr) return { code: "400", success: false, message: descErr, poll: null }
+    const title = normalizeText(pollInput.title)
+    const description = normalizeText(pollInput.description)
+
+    const pollsBefore = await this.getPollsForCampaign(campaignId)
+    const titleKey = title.toLowerCase()
+    const duplicate = pollsBefore.find(p => normalizeText(p.title).toLowerCase() === titleKey)
+    if (duplicate) {
+      return { code: "400", success: false, message: "A poll with this title already exists in this campaign", poll: null }
+    }
+
     const minErr = validateSatsMin('Minimum', pollInput.minSatPerVote)
     if (minErr) return { code: "400", success: false, message: minErr, poll: null }
     const maxErr = validateSatsMax('Maximum', pollInput.maxSatPerVote)
@@ -744,6 +766,25 @@ export class DataSourcesMongo {
       return { code: "400", success: false, message: `Suggested sats per vote must be between ${lo} and ${hi}`, poll: null }
     }
 
+    const currentCampaign = await this.getCampaign(campaignId)
+    if (!currentCampaign) {
+      return { code: "404", success: false, message: "Parent campaign not found", poll: null }
+    }
+    if (pollInput.minSatPerVote !== currentCampaign.minSatPerVote) {
+      return { code: "400", success: false, message: "Poll minimum must equal campaign minimum", poll: null }
+    }
+    if (pollInput.maxSatPerVote !== currentCampaign.maxSatPerVote) {
+      return { code: "400", success: false, message: "Poll maximum must equal campaign maximum", poll: null }
+    }
+    if (sug < currentCampaign.minSatPerVote! || sug > currentCampaign.maxSatPerVote!) {
+      return {
+        code: "400",
+        success: false,
+        message: `Suggested must be between ${currentCampaign.minSatPerVote} and ${currentCampaign.maxSatPerVote} (campaign bounds)`,
+        poll: null,
+      }
+    }
+
     const minSatPerVote = pollInput.minSatPerVote || minSatPerVoteDefault
     const maxSatPerVote = pollInput.maxSatPerVote || maxSatPerVoteDefault
     const suggestedSatPerVote = pollInput.suggestedSatPerVote || suggestedSatPerVoteDefault
@@ -755,14 +796,10 @@ export class DataSourcesMongo {
     const updatedDate = creationDate
     // const startingDate = new Date(pollInput.startingDate)
     // const endingDate = new Date(pollInput.endingDate)
-    const currentCampaign = await this.getCampaign(campaignId)
 
-    // to get the new pollId, we must compare poll database before and after !!!
+    // pollsBefore is fetched above (uniqueness check) and reused below to find the new pollId
     console.log("createPoll campaignId", campaignId)
     console.log("createPoll authorId", authorId)
-    const pollsBefore = await this.getPollsForCampaign(campaignId)
-    // console.log("pollsBefore", pollsBefore)
-    // console.table(pollsBefore)
 
     try {
       const result = await prisma.campaign.update({
@@ -778,8 +815,8 @@ export class DataSourcesMongo {
                   // authorId: authorId.toString(),
                   // authorId: "66c4b26f8d94b6da2b1fa18d",
                   authorId: authorId,
-                  title: pollInput.title,
-                  description: pollInput.description,
+                  title: title,
+                  description: description,
                   paused: false,
                   creationDate: creationDate,
                   updatedDate: creationDate,
@@ -812,8 +849,8 @@ export class DataSourcesMongo {
           id: newPollId,
           campaignId: campaignId,
           authorId: authorId,
-          title: pollInput.title,
-          description: pollInput.description,
+          title: title,
+          description: description,
           paused: false,
           creationDate: creationDate,
           startingDate: currentCampaign.startingDate,
@@ -841,6 +878,21 @@ export class DataSourcesMongo {
   // FIXME: REVIEW: remove authorId
   async createPollOption(authorId: String, pollOptionInput: PollOptionInput): Promise<PollOptionMutationResponse> {
      const pollId = pollOptionInput.pollId
+
+     const titleErr = validateTitle(pollOptionInput.title)
+     if (titleErr) return { code: "400", success: false, message: titleErr, pollOption: null }
+     const descErr = validateDescription(pollOptionInput.description)
+     if (descErr) return { code: "400", success: false, message: descErr, pollOption: null }
+     const title = normalizeText(pollOptionInput.title)
+     const description = normalizeText(pollOptionInput.description)
+
+     const existingOptions = await this.getPollOptionsForPoll(pollId)
+     const titleKey = title.toLowerCase()
+     const duplicate = existingOptions.find(o => normalizeText(o.title).toLowerCase() === titleKey)
+     if (duplicate) {
+       return { code: "400", success: false, message: "An option with this title already exists in this poll", pollOption: null }
+     }
+
      try {
       const result = await prisma.poll.update({
         where: {
@@ -851,8 +903,8 @@ export class DataSourcesMongo {
             createMany: {
               data: [
                 {
-                  title: pollOptionInput.title,
-                  description: pollOptionInput.description
+                  title: title,
+                  description: description
                 }
               ]
             }
@@ -862,7 +914,7 @@ export class DataSourcesMongo {
           pollOptions: true
         }
       })
-      const pollOption = result.pollOptions.filter(pollOption => pollOption.title == pollOptionInput.title)
+      const pollOption = result.pollOptions.filter(pollOption => pollOption.title == title)
 
       return {
         code: "200",
@@ -871,8 +923,8 @@ export class DataSourcesMongo {
         pollOption: {
           id: pollOption[0].id,
           pollId: pollId,
-          title: pollOptionInput.title,
-          description: pollOptionInput.description,
+          title: title,
+          description: description,
           sats: 0,
           votes: 0,
           views: 0,
