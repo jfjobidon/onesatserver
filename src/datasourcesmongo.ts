@@ -241,7 +241,7 @@ export class DataSourcesMongo {
     }
     catch(error) {
       console.log(error)  // TODO: logError(error)
-      return null
+      1 null
     }
   }
 
@@ -598,15 +598,13 @@ export class DataSourcesMongo {
     const creationDate = new Date()
     const startingDate = new Date(campaignInput.startingDate)
     const endingDate = new Date(campaignInput.endingDate)
-    
-    if (creationDate > startingDate) {
-      console.log("creationDate NOT OK")
-      // throw new Error("Creation Date cannot be in the past") // REVIEW: graphql: INTERNAL_SERVER_ERROR
-    }
 
-    if (startingDate > endingDate) {
-      console.log("Ending Date MUST be later than Starting Date")
-      // throw new Error("Creation Date cannot be in the past") // REVIEW: graphql: INTERNAL_SERVER_ERROR
+    const STARTING_DATE_GRACE_MS = 60_000 // tolerate up to 1 minute of clock skew / processing latency
+    if (startingDate.getTime() < creationDate.getTime() - STARTING_DATE_GRACE_MS) {
+      return { code: "400", success: false, message: "Starting date must be now or in the future", campaign: null }
+    }
+    if (endingDate <= startingDate) {
+      return { code: "400", success: false, message: "Ending date must be after starting date", campaign: null }
     }
 
     try {
