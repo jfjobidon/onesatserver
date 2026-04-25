@@ -671,6 +671,32 @@ export class DataSourcesMongo {
     }
   }
 
+  // Recompute campaign.status between 'draft' and 'ready' based on poll readiness.
+  // Never overwrites 'published' / 'active' / 'ended' — those transitions are explicit.
+  async recomputeCampaignStatus(campaignId: string): Promise<void> {
+    try {
+      const campaign = await prisma.campaign.findUnique({
+        where: { id: campaignId },
+        include: { polls: { include: { pollOptions: true } } },
+      })
+      if (!campaign) return
+      if (campaign.status !== 'draft' && campaign.status !== 'ready') return
+
+      const isReady =
+        campaign.polls.length > 0 &&
+        campaign.polls.every(p => p.pollOptions.length >= 2)
+      const desired = isReady ? 'ready' : 'draft'
+      if (campaign.status === desired) return
+
+      await prisma.campaign.update({
+        where: { id: campaignId },
+        data: { status: desired, updatedDate: new Date() },
+      })
+    } catch (err) {
+      console.log('recomputeCampaignStatus err', err)
+    }
+  }
+
   async publishCampaign(campaignId: string): Promise<CampaignMutationResponse> {
     console.log("publishCampaign campaignId", campaignId)
     try {
@@ -855,6 +881,8 @@ export class DataSourcesMongo {
       let newPollArray = pollsAfter.filter(pollAfter => pollsBefore.every(pollBefore => !(pollBefore.id === pollAfter.id)))
       const newPollId = newPollArray[0].id
 
+      await this.recomputeCampaignStatus(campaignId)
+
       return {
         code: "200",
         success: true,
@@ -929,6 +957,8 @@ export class DataSourcesMongo {
         }
       })
       const pollOption = result.pollOptions.filter(pollOption => pollOption.title == title)
+
+      await this.recomputeCampaignStatus(result.campaignId)
 
       return {
         code: "200",
