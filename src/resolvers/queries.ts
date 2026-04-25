@@ -116,8 +116,8 @@ const queries: QueryResolvers = {
     return campaign
   },
 
-  getCampaignAll: async(_, args) => {
-    const campaignAll = await dataSourcesMongo.getCampaignAll(args.id)
+  getCampaignAll: async(_, args, context) => {
+    const campaignAll = await dataSourcesMongo.getCampaignAll(args.id, context?.userId)
     return campaignAll
   },
 

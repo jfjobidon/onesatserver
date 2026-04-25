@@ -333,7 +333,16 @@ export class DataSourcesMongo {
         }
       default:    // ALL
         try {
-          const campaignsMongo: CampaignMongo[] = await prisma.campaign.findMany()
+          // Hide DRAFT / READY campaigns from non-authors. Authors still see their own
+          // unpublished campaigns via the USER tab.
+          const campaignsMongo: CampaignMongo[] = await prisma.campaign.findMany({
+            where: {
+              OR: [
+                { status: { notIn: ['draft', 'ready'] } },
+                { authorId: uid },
+              ],
+            },
+          })
           const favorites = await this.getFavorites(uid)
           const voteds = await dataSourcesRedis.getVoted(uid)
           if (campaignsMongo === null) {
@@ -358,21 +367,24 @@ export class DataSourcesMongo {
     }
   }
 
-  async getCampaignAll(campaignId: string): Promise<CampaignAll> {
+  async getCampaignAll(campaignId: string, viewerUid?: string): Promise<CampaignAll> {
     try {
-      const campaign: CampaignMongo = await prisma.campaign.findUnique({ where: {id: campaignId} })
+      const campaign: CampaignMongo | null = await prisma.campaign.findUnique({ where: {id: campaignId} })
       if (campaign === null) {
         return null
-      } else {
-        const polls = await this.getPollsAllForCampaign(campaignId)
-        // console.log("polls")
-        // console.log(polls)
-        // const polls = []
-        const sats = await dataSourcesRedis.getSatsForCampaign(campaignId)
-        const votes = await dataSourcesRedis.getNbVotesForCampaign(campaignId)
-        const views = await dataSourcesRedis.getNbViewsForCampaign(campaignId)
-        return {...campaign, pollsAll: polls, sats: sats, votes, views}
       }
+      // Hide DRAFT / READY from non-authors. The campaign exists, but only the author can fetch it.
+      if ((campaign.status === 'draft' || campaign.status === 'ready') && campaign.authorId !== viewerUid) {
+        return null
+      }
+      const polls = await this.getPollsAllForCampaign(campaignId)
+      // console.log("polls")
+      // console.log(polls)
+      // const polls = []
+      const sats = await dataSourcesRedis.getSatsForCampaign(campaignId)
+      const votes = await dataSourcesRedis.getNbVotesForCampaign(campaignId)
+      const views = await dataSourcesRedis.getNbViewsForCampaign(campaignId)
+      return {...campaign, pollsAll: polls, sats: sats, votes, views}
     }
     catch(error) {
       console.log(error)  // TODO: logError(error)
