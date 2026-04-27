@@ -33,8 +33,7 @@ const minSatPerVoteDefault = config.get<string>('minSatPerVoteDefault')
 const maxSatPerVoteDefault = config.get<string>('maxSatPerVoteDefault') 
 const suggestedSatPerVoteDefault = config.get<string>('suggestedSatPerVoteDefault') 
 const campaignPausedDefault = config.get<string>('campaignPausedDefault') 
-const isPrivateDefault = config.get<string>('isPrivate') 
-const blindAmountDefault = config.get<string>('blindAmount') 
+const blindAmountDefault = config.get<string>('blindAmount')
 const blindRankDefault = config.get<string>('blindRank') 
 const blindVoteDefault = config.get<string>('blindVote') 
 const allowMultipleVotesDefault = config.get<string>('allowMultipleVotes') 
@@ -52,6 +51,7 @@ import { Campaign as CampaignMongo, Poll as PollMongo, PollOption as PollOptionM
 import { DataSourcesRedis } from "./datasourcesredis.js"
 import { validateSatsMax, validateSatsMin } from "./utils/satsBounds.js"
 import { validateTitle, validateDescription, normalizeText } from "./utils/textBounds.js"
+import { validateCampaignDates } from "./utils/dateBounds.js"
 // import { CampaignType } from "./utils/types"
 const dataSourcesRedis = new DataSourcesRedis()
 // import { describe } from "node:test"
@@ -583,24 +583,30 @@ export class DataSourcesMongo {
       return { code: "400", success: false, message: `Suggested sats per vote must be between ${lo} and ${hi}`, campaign: null }
     }
 
-    const minSatPerVote = campaignInput.minSatPerVote || minSatPerVoteDefault
-    const maxSatPerVote = campaignInput.maxSatPerVote || maxSatPerVoteDefault
-    const suggestedSatPerVote = campaignInput.suggestedSatPerVote || suggestedSatPerVoteDefault
-    const isPrivate = campaignInput.isPrivate || isPrivateDefault
-    const blindAmount = campaignInput.blindAmount || blindAmountDefault
-    const blindRank = campaignInput.blindRank || blindRankDefault
-    const blindVote = campaignInput.blindVote || blindVoteDefault
-    const allowMultipleVotes = campaignInput.allowMultipleVotes || allowMultipleVotesDefault
+    // CampaignInput fields are now all required by the GraphQL schema, so no
+    // server-side defaults. The client controls UX defaults explicitly.
+    const minSatPerVote = campaignInput.minSatPerVote
+    const maxSatPerVote = campaignInput.maxSatPerVote
+    const suggestedSatPerVote = campaignInput.suggestedSatPerVote
+    const isPrivate = campaignInput.isPrivate
+    const blindAmount = campaignInput.blindAmount
+    const blindRank = campaignInput.blindRank
+    const blindVote = campaignInput.blindVote
+    const allowMultipleVotes = campaignInput.allowMultipleVotes
     const creationDate = new Date()
     const startingDate = new Date(campaignInput.startingDate)
     const endingDate = new Date(campaignInput.endingDate)
 
-    const STARTING_DATE_GRACE_MS = 60_000 // tolerate up to 1 minute of clock skew / processing latency
-    if (startingDate.getTime() < creationDate.getTime() - STARTING_DATE_GRACE_MS) {
-      return { code: "400", success: false, message: "Starting date must be now or in the future", campaign: null }
+    const dateErr = validateCampaignDates(startingDate, endingDate, creationDate)
+    if (dateErr) {
+      return { code: "400", success: false, message: dateErr, campaign: null }
     }
-    if (endingDate <= startingDate) {
-      return { code: "400", success: false, message: "Ending date must be after starting date", campaign: null }
+
+    // Verify the User record exists in MongoDB before attempting the relational
+    // update (otherwise Prisma throws an opaque P2025 → caught as a generic 500).
+    const userExists = await prisma.user.findUnique({ where: { uid: authorId } })
+    if (!userExists) {
+      return { code: "404", success: false, message: "User not found", campaign: null }
     }
 
     try {
@@ -655,12 +661,19 @@ export class DataSourcesMongo {
           suggestedSatPerVote: suggestedSatPerVote,
           paused: campaignPausedDefault,
           status: "draft",
+          isPrivate: isPrivate,
           blindAmount: blindAmount,
           blindRank: blindRank,
           blindVote: blindVote,
           allowMultipleVotes: allowMultipleVotes,
           creationDate: creationDate,
           updatedDate: creationDate,
+          // TODO: schema declares isFavorite/isVoted as Boolean! — they are
+          // user-relative fields not meaningful at creation time. If a future
+          // query requests them in the createCampaign response, populate them
+          // here (default to false) or remove them from the Campaign type.
+          isFavorite: false,
+          isVoted: false,
           sats: 0,
           votes: 0,
           views: 0

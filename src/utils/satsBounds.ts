@@ -14,6 +14,9 @@ export const validateSatsMin = (label: string, value: number | null | undefined)
 
 export const validateSatsMax = (label: string, value: number | null | undefined): string | null => {
   if (value == null || !Number.isInteger(value)) return `${label} is invalid`
+  if (value < MIN_SATS_PER_VOTE_FLOOR) {
+    return `${label} must be at least ${MIN_SATS_PER_VOTE_FLOOR} sat`
+  }
   if (value > MAX_SATS_PER_VOTE_CEILING) {
     return `${label} must be at most ${MAX_SATS_PER_VOTE_CEILING.toLocaleString()} sats (1 BTC)`
   }

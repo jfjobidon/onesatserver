@@ -1,0 +1,5 @@
+{
+    "name": "test",
+    "DBURI": "mongodb://localhost:27018/osov_test?replicaSet=rs0&directConnection=true",
+    "REDIS_URL": "redis://default:rRTGwNDL7a@localhost:6380"
+}

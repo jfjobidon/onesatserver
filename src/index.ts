@@ -22,11 +22,8 @@ import { startCampaignStatusCron } from './jobs/campaignStatusCron.js';
 import 'dotenv/config'
 import config from "config";
 console.log(`server started on ${process.env.NODE_ENV} mode`);
-process.env.DBURI = config.get<string>('DBURI');
 process.env.port = config.get<string>('port');
 const PORT = process.env.port || 4000 // default dev
-
-console.log(`server started on ${process.env.DBURI} mode`);
 
 // TODO: test this: read file that doesnt exist
 // process.on('uncaughtException', err => {

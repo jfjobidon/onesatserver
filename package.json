@@ -11,7 +11,11 @@
     "compile": "npm run generate && tsc",
     "pgc": "npm run prisma && npm run generate && npm run compile",
     "start": "npm run compile && node ./dist/index.js",
-    "watch": "concurrently  --names \"CodeGen,TS,Nodemon\" -c \"bgYellow,bgBlue,bgMagenta\" \"graphql-codegen --watch 'src/**/*.ts'\"  \"tsc -w \" \"nodemon ./dist/index.js \""
+    "watch": "concurrently  --names \"CodeGen,TS,Nodemon\" -c \"bgYellow,bgBlue,bgMagenta\" \"graphql-codegen --watch 'src/**/*.ts'\"  \"tsc -w \" \"nodemon ./dist/index.js \"",
+    "test": "vitest run",
+    "test:unit": "vitest run --project unit",
+    "test:integration": "vitest run --project integration",
+    "test:watch": "vitest"
   },
   "keywords": [],
   "author": "",
@@ -53,6 +57,7 @@
     "nodemon": "^3.0.1",
     "prisma": "^5.22.0",
     "tmp": "^0.2.5",
-    "typescript": "^5.2.2"
+    "typescript": "^5.2.2",
+    "vitest": "^4.1.5"
   }
 }

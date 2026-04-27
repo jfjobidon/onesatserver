@@ -81,12 +81,21 @@ web_modules/
 # Firebase service account key
 firebase-service-account.json
 
-# Client-facing specs (generated/maintained for Claude client; not needed in repo history)
-documentations/specs-for-client/
+# Local documentation (devDoc, audits, mutation specs, client specs).
+# Kept local — not needed in repo history.
+documentation/
+
+# tsc-compiled artifacts at the repo root and under test/.
+# We keep only the .ts sources — vitest runs them directly.
+vitest.config.js
+vitest.config.js.map
+test/**/*.js
+test/**/*.js.map
 
 # dotenv environment variable files
 .env
 .env.development.local
+.env.test
 .env.test.local
 .env.production.local
 .env.local

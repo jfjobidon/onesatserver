@@ -39,6 +39,78 @@ npm run prisma     # Prisma client generation only
 
 After modifying `schema.graphql`, run `npm run generate`. After modifying `prisma/schema.prisma`, run `npm run prisma`.
 
+## MongoDB Setup (Docker)
+
+This project uses **mongo:7** with a **single-node replica set**. Prisma + MongoDB requires a replica set for transactions (used by nested writes in `createCampaign` etc.) — a standalone Mongo will fail at runtime.
+
+### Why two volumes per container
+
+The `mongo` image declares two volumes in its Dockerfile:
+- `/data/db` — actual database files (collections, indexes)
+- `/data/configdb` — replica set configuration / metadata
+
+Both must be mapped to **named** volumes; otherwise Docker creates anonymous volumes (visible as a hash in Portainer) for `/data/configdb`. We use the convention `<container-name>-data` for `/data/db` and `<container-name>-configdb-data` for `/data/configdb`.
+
+### Create the dev container
+
+```bash
+docker run -d \
+  --name osov-mongo-dev \
+  -p 27017:27017 \
+  -v osov-mongo-dev-data:/data/db \
+  -v osov-mongo-dev-configdb-data:/data/configdb \
+  mongo:7 --replSet rs0 --bind_ip_all
+
+# Wait a few seconds for Mongo to be ready, then init the replica set:
+sleep 3
+docker exec osov-mongo-dev mongosh --quiet --eval \
+  "rs.initiate({_id:'rs0',members:[{_id:0,host:'localhost:27017'}]})"
+```
+
+`--bind_ip_all` is required for the container to accept connections from the host (otherwise it only listens on the container's loopback).
+
+### Create the test container
+
+Same image and replica set, but on port **27018** with separate volumes so the integration test suite (`vitest --project integration`) wipes its DB without touching dev data:
+
+```bash
+docker run -d \
+  --name osov-mongo-test \
+  -p 27018:27017 \
+  -v osov-mongo-test-data:/data/db \
+  -v osov-mongo-test-configdb-data:/data/configdb \
+  mongo:7 --replSet rs0 --bind_ip_all
+
+sleep 3
+docker exec osov-mongo-test mongosh --quiet --eval \
+  "rs.initiate({_id:'rs0',members:[{_id:0,host:'localhost:27017'}]})"
+```
+
+### Common Docker commands
+
+```bash
+docker start osov-mongo-dev      # start
+docker stop osov-mongo-dev       # stop
+docker logs osov-mongo-dev       # check logs
+docker exec -it osov-mongo-dev mongosh    # open a shell
+```
+
+### Verify replica set
+
+```bash
+docker exec osov-mongo-dev mongosh --quiet --eval "rs.status().myState"
+# Should print: 1   (1 = PRIMARY)
+```
+
+### Connection strings
+
+The connection URL must include `replicaSet=rs0&directConnection=true`. `directConnection=true` skips the SRV resolution that's only meant for Atlas.
+
+| Container | Connection string |
+|---|---|
+| `osov-mongo-dev` | `mongodb://localhost:27017/onesatonevote?replicaSet=rs0&directConnection=true` (in `.env` as `DATABASE_URL`) |
+| `osov-mongo-test` | `mongodb://localhost:27018/osov_test?replicaSet=rs0&directConnection=true` (in `.env.test` as `DATABASE_URL`) |
+
 ## Redis Setup (Docker)
 
 This project uses **redis/redis-stack** (includes RedisJSON and RediSearch, required by redis-om).
@@ -47,9 +119,9 @@ This project uses **redis/redis-stack** (includes RedisJSON and RediSearch, requ
 
 ```bash
 docker run -d \
-  --name osov-redis \
+  --name osov-redis-dev \
   -p 6379:6379 \
-  -v osov-redis-data:/data \
+  -v osov-redis-dev-data:/data \
   -e REDIS_ARGS="--requirepass rRTGwNDL7a --save 60 1" \
   redis/redis-stack:latest
 ```
@@ -57,38 +129,51 @@ docker run -d \
 **Important:** Use `-e REDIS_ARGS` instead of passing `redis-server ...` as a command. Overriding the command disables the Stack modules (RediSearch, RedisJSON) that redis-om requires for `FT.*` commands.
 
 - **`-p 6379:6379`** — maps container port to localhost:6379 (what the app expects)
-- **`-v osov-redis-data:/data`** — named volume that persists data across container restarts and recreates
+- **`-v osov-redis-dev-data:/data`** — named volume that persists data across container restarts and recreates
 - **`--requirepass rRTGwNDL7a`** — sets the password to match the app config
 - **`--save 60 1`** — snapshot to disk every 60 seconds if at least 1 key changed. Without this, Redis only saves on graceful shutdown; a crash would lose all data since the last save
+
+There is also a **test** instance for the integration test suite:
+
+```bash
+docker run -d \
+  --name osov-redis-test \
+  -p 6380:6379 \
+  -v osov-redis-test-data:/data \
+  -e REDIS_ARGS="--requirepass rRTGwNDL7a --save 60 1" \
+  redis/redis-stack:latest
+```
+
+Same image, same password, but separate volume and exposed on port **6380** so it doesn't clash with `osov-redis-dev`.
 
 ### Common Docker commands
 
 ```bash
-docker start osov-redis          # start
-docker stop osov-redis           # stop
-docker logs osov-redis           # check logs
+docker start osov-redis-dev      # start
+docker stop osov-redis-dev       # stop
+docker logs osov-redis-dev       # check logs
 ```
 
 ### Update Redis image
 
 ```bash
-docker stop osov-redis
-docker rm osov-redis
+docker stop osov-redis-dev
+docker rm osov-redis-dev
 docker pull redis/redis-stack:latest
 docker run -d \
-  --name osov-redis \
+  --name osov-redis-dev \
   -p 6379:6379 \
-  -v osov-redis-data:/data \
+  -v osov-redis-dev-data:/data \
   -e REDIS_ARGS="--requirepass rRTGwNDL7a --save 60 1" \
   redis/redis-stack:latest
 ```
 
-The named volume `osov-redis-data` survives the container removal, so data is preserved.
+The named volume `osov-redis-dev-data` survives the container removal, so data is preserved.
 
 ### Connect with redis-cli
 
 ```bash
-docker exec -it osov-redis redis-cli -a rRTGwNDL7a
+docker exec -it osov-redis-dev redis-cli -a rRTGwNDL7a
 ```
 
 ## Architecture
@@ -125,11 +210,87 @@ When fetching campaigns/polls/pollOptions, entity data comes from MongoDB and is
 
 ### Configuration
 
-Uses `node-config` package with JSON files in `config/`:
-- `config/default.json` — development (port 40000, MongoDB Atlas)
-- `config/production.json` — production (port 4001, local MongoDB)
+Uses `node-config` package with JSON files in `config/`. `node-config` merges `default.json` with the env-specific file (`<NODE_ENV>.json` or `<NODE_CONFIG_ENV>.json`) — env-specific values override defaults.
 
-`NODE_ENV` selects the config file.
+#### Environments
+
+| Env | Selector | Mongo | Redis | Config file |
+|---|---|---|---|---|
+| **development** | `NODE_ENV` unset or `development` (default) | `osov-mongo-dev` Docker (port 27017) | `osov-redis-dev` Docker (port 6379) | `config/default.json` |
+| **test** | `NODE_ENV=test` (auto-set by vitest) | `osov-mongo-test` Docker (port 27018) | `osov-redis-test` Docker (port 6380) | `config/test.json` (merges over default) |
+| **staging** | `NODE_CONFIG_ENV=staging` | Atlas staging (TBD) | Redis Cloud staging (TBD) | `config/staging.json` (placeholder values) |
+| **production** | `NODE_ENV=production` | Atlas prod | Redis Cloud prod (TBD) | `config/production.json` |
+
+**Note on staging vs production:**
+- `NODE_ENV=production` is reserved by convention (Express, bundlers activate optimizations only on this exact value). Staging keeps `NODE_ENV=production` for the same optimizations and uses **`NODE_CONFIG_ENV=staging`** to load `config/staging.json` instead of `config/production.json`. Optionally also set `APP_ENV=staging` if app code needs to branch on the env name.
+- `node-config` documentation: setting `NODE_CONFIG_ENV` overrides `NODE_ENV` for config selection only — they can differ on purpose.
+
+#### `DBURI` (config/*.json) vs `DATABASE_URL` (.env) — keep in sync
+
+Two parallel mechanisms read the same DB connection string:
+- **`DATABASE_URL`** in `.env` — consumed by Prisma directly via `prisma/schema.prisma`. **This is the source of truth at runtime.**
+- **`DBURI`** in `config/*.json` — read via `node-config` for any tool / script / future code path that prefers config-file lookup.
+
+**Rule:** when you change one, change the other in the same commit. They must always point at the same database for the active environment. There is currently no automated check — it's a discipline.
+
+The default dev DB is the **local Docker container `osov-mongo-dev`**, not Atlas. Atlas is reserved for production and staging (when provisioned).
+
+#### Quick environment commands
+
+```bash
+# Development (default)
+npm run watch
+
+# Test (vitest sets NODE_ENV=test automatically and loads .env.test)
+npm test
+
+# Production simulation locally (won't actually start unless Atlas is reachable)
+NODE_ENV=production node ./dist/index.js
+
+# Staging simulation
+NODE_CONFIG_ENV=staging NODE_ENV=production node ./dist/index.js
+```
+
+#### Backlog (config cleanup)
+
+- `config/default.json` and `config/production.json` are tracked in git with the Atlas password and RSA keys in cleartext. These secrets need to be rotated and moved to `.env` / `.env.production` (gitignored).
+- `PRIVATE_KEY` / `PUBLIC_KEY` in `config/default.json` are no longer read by any code (`grep` confirms). To be removed in a follow-up pass.
+- `config/staging.json` contains `TODO` placeholders — fill in once the staging cloud infra (Atlas + Redis Cloud) is provisioned.
+
+
+### Shared client/server constants & validation rules
+
+Some constants must be **identical** on both sides of the wire. They live in two mirrored files and are documented as such:
+- [`onesatserver/src/config/AppConfig.ts`](src/config/AppConfig.ts)
+- [`onesatclient/config/AppConfig.ts`](../onesatclient/config/AppConfig.ts)
+
+When you change a value on one side, update the other in the **same commit**. Same rule for any new shared constant.
+
+**Security rule — never trust the client.** Any constraint enforced client-side (sat bounds, length limits, date order, status transitions, …) must be re-validated server-side. A user with Postman / curl / a custom client can submit anything that satisfies the GraphQL schema; the schema only checks types and `!`-required fields. Business invariants are the resolver's responsibility.
+
+**Workflow for new client-side validations.** When the client team adds or changes a validation rule, they must mirror the rule on the server. To keep both sides in sync without back-and-forth, the client documents what they expect the server to enforce in:
+
+```
+onesatclient/docs/specs-for-server.md
+```
+
+That file is the single source of truth for client → server validation requests. The user (project owner) tells the server team when a new spec lands; the server team then reads that file and applies the matching validations in the appropriate resolver/datasource/AppConfig. **Do not invent validations**: only implement what is explicitly listed there or what the server already needs to be safe against malicious payloads (the server is always free to be stricter than the client, never laxer).
+
+Current shared constraints (validators present on both sides):
+
+| Constraint | Constant | Server validator | Client validator |
+|---|---|---|---|
+| Sats per vote — min floor | `MIN_SATS_PER_VOTE_FLOOR = 1` | [`utils/satsBounds.ts`](src/utils/satsBounds.ts) `validateSatsMin` | `onesatclient/utils/satsBounds.ts` |
+| Sats per vote — max ceiling | `MAX_SATS_PER_VOTE_CEILING = 100_000_000` | [`utils/satsBounds.ts`](src/utils/satsBounds.ts) `validateSatsMax` | `onesatclient/utils/satsBounds.ts` |
+| Title max length | `MAX_TITLE_LENGTH = 100` | `validateTitle` (datasource) | react-hook-form `maxLength` |
+| Description max length | `MAX_DESCRIPTION_LENGTH = 1000` | `validateDescription` (datasource) | react-hook-form `maxLength` |
+| Starting date ≥ now (with grace) | `STARTING_DATE_GRACE_MS = 60_000` | [`utils/dateBounds.ts`](src/utils/dateBounds.ts) `validateCampaignDates` | inline in `CreateCampaignScreen` |
+| Starting date ≤ now + 6 months | `MAX_CAMPAIGN_START_AHEAD_MS = 182 * 24 * 60 * 60 * 1000` | [`utils/dateBounds.ts`](src/utils/dateBounds.ts) `validateCampaignDates` | inline in `CreateCampaignScreen` |
+| Campaign duration ≤ 1 year | `MAX_CAMPAIGN_DURATION_MS = 365 * 24 * 60 * 60 * 1000` | [`utils/dateBounds.ts`](src/utils/dateBounds.ts) `validateCampaignDates` | inline in `CreateCampaignScreen` |
+| End date > start date | — | [`utils/dateBounds.ts`](src/utils/dateBounds.ts) `validateCampaignDates` | form check |
+| `min ≤ suggested ≤ max` sats | — | `createCampaign` | form check |
+
+`CampaignStatus` values (`draft / ready / published / scheduled / active / paused / ended`) are also shared — the client exports them as a constant, the server currently uses string literals. Keep both vocabularies in sync.
 
 ## GraphQL API
 

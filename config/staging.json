@@ -1,0 +1,6 @@
+{
+    "name": "staging",
+    "port": 4002,
+    "DBURI": "TODO: provision Atlas staging cluster",
+    "REDIS_URL": "TODO: provision Redis Cloud staging instance"
+}

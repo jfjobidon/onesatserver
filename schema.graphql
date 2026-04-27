@@ -242,14 +242,14 @@ input CampaignInput {
   description: String!
   startingDate: DateScalar!
   endingDate: DateScalar!
-  minSatPerVote: Int
-  maxSatPerVote: Int
-  suggestedSatPerVote: Int
-  isPrivate: Boolean
-  blindAmount: Boolean
-  blindRank: Boolean
-  blindVote: Boolean
-  allowMultipleVotes: Boolean
+  minSatPerVote: Int!
+  maxSatPerVote: Int!
+  suggestedSatPerVote: Int!
+  isPrivate: Boolean!
+  blindAmount: Boolean!
+  blindRank: Boolean!
+  blindVote: Boolean!
+  allowMultipleVotes: Boolean!
 }
 
 type CampaignMutationResponse {
