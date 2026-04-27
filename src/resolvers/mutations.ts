@@ -19,6 +19,7 @@ import {
 } from '../__generated__/resolvers-types'
 
 import { CreateNewsEventInput } from '../__generated__/resolvers-types'
+import { GraphQLError } from 'graphql'
 import { pubsub } from './pubsub.js'
 import { DataSourcesRedis } from '../datasourcesredis.js'
 const dataSourcesRedis = new DataSourcesRedis()
@@ -219,8 +220,43 @@ const mutations: MutationResolvers = {
     return af
   },
 
+  /**
+   * ## createCampaign — server resolver
+   *
+   * Creates a new campaign owned by the authenticated user.
+   *
+   * ### Authentication & identity
+   * - Requires a valid Firebase Bearer token (verified in `src/firebase.ts` via the Apollo `context`).
+   * - The author is **always** taken from `context.userId` (uid extracted from the verified token).
+   *   Any `authorId` field sent by the client is ignored — the GraphQL schema doesn't even accept it.
+   *
+   * ### Errors
+   * - `UNAUTHENTICATED` (401) if no/invalid token.
+   * - `BAD_USER_INPUT` (400) if `campaignInput` is missing.
+   * - The datasource may also return a structured response with `success: false` for validation errors
+   *   (title length, sat bounds, date order, etc.) — those don't throw.
+   *
+   * ### Side effects
+   * - Inserts a new document in MongoDB (`Campaign` collection via Prisma).
+   * - No Redis writes happen here (Redis stats are populated when votes start coming in).
+   *
+   * ### Related files
+   * - Datasource: `src/datasourcesmongo.ts` → `DataSourcesMongo.createCampaign(input, authorId)`
+   * - Schema: `schema.graphql` → `input CampaignInput` and `mutation createCampaign`
+   * - Client call: `onesatclient/screens/CreateCampaignScreens/CreateCampaignScreen.tsx`
+   */
   createCampaign: async (_, { campaignInput }, context): Promise<CampaignMutationResponse> => {
-    let campaign = await dataSourcesMongo.createCampaign(campaignInput)
+    if (!context.userId) {
+      throw new GraphQLError('Not authenticated', {
+        extensions: { code: 'UNAUTHENTICATED', http: { status: 401 } },
+      })
+    }
+    if (!campaignInput) {
+      throw new GraphQLError('campaignInput is required', {
+        extensions: { code: 'BAD_USER_INPUT', http: { status: 400 } },
+      })
+    }
+    let campaign = await dataSourcesMongo.createCampaign(campaignInput, context.userId)
     return {...campaign}
   },
 

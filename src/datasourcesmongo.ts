@@ -20,6 +20,8 @@ import {
   FundingInput,
   FundingMutationResponse,
   PauseMutationResponse,
+  PausePollInput,
+  PauseCampaignInput,
   GetVotesQueryResponse,
   FavoriteElementMutationResponse,
   FavoriteInput
@@ -114,11 +116,12 @@ export class DataSourcesMongo {
   async getUserByUserName(userName: string): Promise<User> {
     // console.log("in getUserByUserName")
     // console.log(userName)
-    const user = prisma.user.findUnique({ where: { userName: userName } })
+    const user = await prisma.user.findUnique({ where: { userName: userName } })
+    if (!user) throw new Error(`User not found: ${userName}`)
     return user
   }
 
-  async getUserByEmail(email: string): Promise<User> {
+  async getUserByEmail(email: string): Promise<User | null> {
     // console.log("in getUserByEmail")
     // console.log(email)
     const user = await prisma.user.findUnique({ where: { email: email } })
@@ -193,20 +196,6 @@ export class DataSourcesMongo {
             }
           }
         }
-        await prisma.user.update({
-          data: {
-            favorites: {
-              set: [...user.favorites, "jfakfklads"],
-            },
-          },
-          where: { uid: favoriteInput.uid },
-        })
-        return {
-          code: "400",
-          success: true,
-          message: "element added to favorites",
-          ...favoriteInput
-        }
       } else {
         return {
           code: "200",
@@ -229,9 +218,12 @@ export class DataSourcesMongo {
 
   async getCampaign(campaignId: string): Promise<Campaign> {
     try {
-      const campaign: CampaignMongo = await prisma.campaign.findUnique({ where: {id: campaignId} })
+      const campaign: CampaignMongo | null = await prisma.campaign.findUnique({ where: {id: campaignId} })
       if (campaign === null) {
-        return null
+        // DB invariant: any reachable campaignId must resolve to a campaign.
+        // Cleanup scripts must remove dangling references (favorites, votes, polls)
+        // when a campaign is deleted, so callers never see an orphan id.
+        throw new Error(`Inconsistent DB: campaign ${campaignId} not found`)
       } else {
         const sats = await dataSourcesRedis.getSatsForCampaign(campaignId)
         const nbVotes = await dataSourcesRedis.getNbVotesForCampaign(campaignId)
@@ -241,7 +233,7 @@ export class DataSourcesMongo {
     }
     catch(error) {
       console.log(error)  // TODO: logError(error)
-      1 null
+      throw error
     }
   }
 
@@ -258,7 +250,7 @@ export class DataSourcesMongo {
           // const campaignsMongo: CampaignMongo[] = await prisma.campaign.findMany()
           // console.log("campaignsMongo length", campaignsMongo.length)
           if (campaignsMongo === null) {
-            return null
+            return []
           } else {
             let campaigns: Campaign[] = []
     
@@ -277,7 +269,7 @@ export class DataSourcesMongo {
         }
         catch(error) {
           console.log(error)  // TODO: logError(error)
-          return null
+          return []
         }
         break
       case 'FAVORITES':
@@ -286,7 +278,7 @@ export class DataSourcesMongo {
           const favorites = await this.getFavorites(uid) // [campaignId] TODO: campaigns + polls + pollOptions
           const voteds = await dataSourcesRedis.getVoted(uid)
           if (favorites.length === 0) {
-            return null
+            return []
           } else {
             for (const favorite of favorites) {
               const campaign = await this.getCampaign(favorite)
@@ -304,7 +296,7 @@ export class DataSourcesMongo {
         }
         catch(error) {
           console.log(error)  // TODO: logError(error)
-          return null
+          return []
         }
       case 'VOTED':
         try {
@@ -312,7 +304,7 @@ export class DataSourcesMongo {
           const voteds = await dataSourcesRedis.getVoted(uid) // [campaignId] TODO: campaigns + polls + pollOptions
           const favorites = await this.getFavorites(uid)
           if (voteds.length === 0) {
-            return null
+            return []
           } else {
             for (const voted of voteds) {
               console.log("voted", voted)
@@ -329,7 +321,7 @@ export class DataSourcesMongo {
         }
         catch(error) {
           console.log(error)  // TODO: logError(error)
-          return null
+          return []
         }
       default:    // ALL
         try {
@@ -346,7 +338,7 @@ export class DataSourcesMongo {
           const favorites = await this.getFavorites(uid)
           const voteds = await dataSourcesRedis.getVoted(uid)
           if (campaignsMongo === null) {
-            return null
+            return []
           } else {
             let campaigns: Campaign[] = []
             for (const campaign of campaignsMongo) {
@@ -362,12 +354,12 @@ export class DataSourcesMongo {
         }
         catch(error) {
           console.log(error)  // TODO: logError(error)
-          return null
+          return []
         }
     }
   }
 
-  async getCampaignAll(campaignId: string, viewerUid?: string): Promise<CampaignAll> {
+  async getCampaignAll(campaignId: string, viewerUid?: string): Promise<CampaignAll | null> {
     try {
       const campaign: CampaignMongo | null = await prisma.campaign.findUnique({ where: {id: campaignId} })
       if (campaign === null) {
@@ -392,8 +384,9 @@ export class DataSourcesMongo {
     }
   }
 
-  async togglePausePoll(pausePollInput) : Promise<PauseMutationResponse> {
-    const poll: PollMongo = await prisma.poll.findUnique({ where: {id: pausePollInput.pollId} })
+  async togglePausePoll(pausePollInput: PausePollInput) : Promise<PauseMutationResponse> {
+    const poll: PollMongo | null = await prisma.poll.findUnique({ where: {id: pausePollInput.pollId} })
+    if (!poll) throw new Error(`Inconsistent DB: poll ${pausePollInput.pollId} not found`)
     const updatePoll = await prisma.poll.update({
       where: {
         id: pausePollInput.pollId,
@@ -404,7 +397,8 @@ export class DataSourcesMongo {
         },
       },
     })
-    const campaign: CampaignMongo = await prisma.campaign.findUnique({ where: {id: poll.campaignId} })
+    const campaign: CampaignMongo | null = await prisma.campaign.findUnique({ where: {id: poll.campaignId} })
+    if (!campaign) throw new Error(`Inconsistent DB: campaign ${poll.campaignId} not found`)
 
     const polls = await this.getPollsForCampaign(campaign.id)
     const pollsStatus: any = polls.map(poll => {
@@ -427,8 +421,9 @@ export class DataSourcesMongo {
     }
   }
 
-  async togglePauseCampaign(pauseCampaignInput) : Promise<PauseMutationResponse> {
-    const campaign: CampaignMongo = await prisma.campaign.findUnique({ where: {id: pauseCampaignInput.campaignId} })
+  async togglePauseCampaign(pauseCampaignInput: PauseCampaignInput) : Promise<PauseMutationResponse> {
+    const campaign: CampaignMongo | null = await prisma.campaign.findUnique({ where: {id: pauseCampaignInput.campaignId} })
+    if (!campaign) throw new Error(`Inconsistent DB: campaign ${pauseCampaignInput.campaignId} not found`)
     const updateCampaign = await prisma.campaign.update({
       where: {
         id: pauseCampaignInput.campaignId
@@ -462,7 +457,8 @@ export class DataSourcesMongo {
   }
 
   async getPoll(pollId: string): Promise<Poll> {
-    const poll: PollMongo = await prisma.poll.findUnique({ where: {id: pollId} })
+    const poll: PollMongo | null = await prisma.poll.findUnique({ where: {id: pollId} })
+    if (!poll) throw new Error(`Inconsistent DB: poll ${pollId} not found`)
     const sats = await dataSourcesRedis.getSatsForPoll(pollId)
     const nbVotes = await dataSourcesRedis.getNbVotesForPoll(pollId)
     const nbViews = await dataSourcesRedis.getNbViewsForPoll(pollId)
@@ -527,7 +523,8 @@ export class DataSourcesMongo {
   }
 
   async getPollOption(pollOptionId: string): Promise<PollOption> {
-    const pollOption: PollOptionMongo = await prisma.pollOption.findUnique({ where: { id: pollOptionId}})
+    const pollOption: PollOptionMongo | null = await prisma.pollOption.findUnique({ where: { id: pollOptionId}})
+    if (!pollOption) throw new Error(`Inconsistent DB: pollOption ${pollOptionId} not found`)
     // console.log(pollOption)
     const sats = await dataSourcesRedis.getSatsForPollOption(pollOptionId)
     const nbVotes = await dataSourcesRedis.getNbVotesForPollOption(pollOptionId)
@@ -561,10 +558,9 @@ export class DataSourcesMongo {
     }
   }
 
-  async createCampaign(campaignInput: CampaignInput): Promise<CampaignMutationResponse> {
+  async createCampaign(campaignInput: CampaignInput, authorId: string): Promise<CampaignMutationResponse> {
     console.log("createCampaign campaignInput")
     console.log(campaignInput)
-    let authorId = campaignInput.authorId
 
     const titleErr = validateTitle(campaignInput.title)
     if (titleErr) return { code: "400", success: false, message: titleErr, campaign: null }
@@ -923,6 +919,12 @@ export class DataSourcesMongo {
       }
     } catch (err) {
       console.log("mongo err", err)
+      return {
+        code: "500",
+        success: false,
+        message: "Error creating poll: " + (err as Error).message,
+        poll: null,
+      }
     }
   }
 
@@ -987,21 +989,18 @@ export class DataSourcesMongo {
       }
      } catch (err) {
       console.log(err)
+      return {
+        code: "500",
+        success: false,
+        message: "Error creating poll option: " + (err as Error).message,
+        pollOption: null,
+      }
      }
   }
 
-  async getUserById(id: string): Promise<null | User> {
-    let user
-    try {
-      user = await prisma.user.findUnique({ where: { id: id } })
-      if (user === null) {
-        return null
-      }
-    }
-    catch(error) {
-      console.log("error user", error)
-      return null
-    }
+  async getUserById(id: string): Promise<User> {
+    const user: UserMongo | null = await prisma.user.findUnique({ where: { id: id } })
+    if (user === null) throw new Error(`Inconsistent DB: user ${id} not found`)
     const campaigns: CampaignMongo[] = await prisma.campaign.findMany({ where: {authorId: id} })
 
     let campaignsStats: Campaign[] = []
@@ -1031,33 +1030,15 @@ export class DataSourcesMongo {
     // return null
   }
 
-  async getUserName(uid: string): Promise<null | string> {
-    let user: UserMongo
-    try {
-      user = await prisma.user.findUnique({ where: { uid: uid } })
-      if (user === null) {
-        return null
-      }
-    }
-    catch(error) {
-      console.log("error user", error)
-      return null
-    }
+  async getUserName(uid: string): Promise<string> {
+    const user: UserMongo | null = await prisma.user.findUnique({ where: { uid: uid } })
+    if (user === null) throw new Error(`Inconsistent DB: user ${uid} not found`)
     return user.userName
   }
 
   async getFavorites(uid: string): Promise<string[]> {
-    let user: UserMongo
-    try {
-      user = await prisma.user.findUnique({ where: { uid: uid } })
-      if (user === null) {
-        return []
-      }
-    }
-    catch(error) {
-      console.log("error user", error)
-      return null
-    }
+    const user: UserMongo | null = await prisma.user.findUnique({ where: { uid: uid } })
+    if (user === null) throw new Error(`Inconsistent DB: user ${uid} not found`)
     return user.favorites
   }
 
@@ -1076,6 +1057,12 @@ export class DataSourcesMongo {
       }
     } catch (err) {
       console.log(err)
+      return {
+        code: "500",
+        success: false,
+        message: "Error creating user: " + (err as Error).message,
+        user: null,
+      }
     }
   }
 

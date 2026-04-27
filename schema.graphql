@@ -90,31 +90,31 @@ type Poll {
   startingDate: DateScalar!
   endingDate: DateScalar!
   updatedDate: DateScalar!
-  minSatPerVote: Int
-  maxSatPerVote: Int
-  suggestedSatPerVote: Int
-  blindAmount: Boolean
-  blindRank: Boolean
-  blindVote: Boolean
-  allowMultipleVotes: Boolean
-  pollOptions: [PollOption]
+  minSatPerVote: Int!
+  maxSatPerVote: Int!
+  suggestedSatPerVote: Int!
+  blindAmount: Boolean!
+  blindRank: Boolean!
+  blindVote: Boolean!
+  allowMultipleVotes: Boolean!
+  pollOptions: [PollOption!]!
   sats: Int!
   votes: Int!
-  views: Int!  
+  views: Int!
 }
 
 type PollAll {
-  id: String
+  id: String!
   campaignId: String!
   title: String!
   description: String!
   startingDate: DateScalar!
   endingDate: DateScalar!
   paused: Boolean!
-  sats: Int
-  votes: Int
-  views: Int
-  pollOptions: [PollOption]
+  sats: Int!
+  votes: Int!
+  views: Int!
+  pollOptions: [PollOption!]!
 }
 
 input PollInput {
@@ -194,21 +194,21 @@ type Campaign {
   startingDate: DateScalar!
   endingDate: DateScalar!
   updatedDate: DateScalar!
-  minSatPerVote: Int
-  maxSatPerVote: Int
-  suggestedSatPerVote: Int
-  isPrivate: Boolean
-  blindAmount: Boolean
-  blindRank: Boolean
-  blindVote: Boolean
-  allowMultipleVotes: Boolean
-  paused: Boolean
-  status: String
-  isFavorite: Boolean
-  isVoted: Boolean
-  sats: Int
-  votes: Int
-  views: Int
+  minSatPerVote: Int!
+  maxSatPerVote: Int!
+  suggestedSatPerVote: Int!
+  isPrivate: Boolean!
+  blindAmount: Boolean!
+  blindRank: Boolean!
+  blindVote: Boolean!
+  allowMultipleVotes: Boolean!
+  paused: Boolean!
+  status: String!
+  isFavorite: Boolean!
+  isVoted: Boolean!
+  sats: Int!
+  votes: Int!
+  views: Int!
 }
 
 type CampaignAll {
@@ -221,26 +221,25 @@ type CampaignAll {
   startingDate: DateScalar!
   endingDate: DateScalar!
   updatedDate: DateScalar!
-  minSatPerVote: Int
-  maxSatPerVote: Int
-  suggestedSatPerVote: Int
-  isPrivate: Boolean
-  blindAmount: Boolean
-  blindRank: Boolean
-  blindVote: Boolean
-  allowMultipleVotes: Boolean
-  paused: Boolean
-  status: String
+  minSatPerVote: Int!
+  maxSatPerVote: Int!
+  suggestedSatPerVote: Int!
+  isPrivate: Boolean!
+  blindAmount: Boolean!
+  blindRank: Boolean!
+  blindVote: Boolean!
+  allowMultipleVotes: Boolean!
+  paused: Boolean!
+  status: String!
   sats: Int!
   votes: Int!
   views: Int!
-  pollsAll: [PollAll]
+  pollsAll: [PollAll!]!
 }
 
 input CampaignInput {
   title: String!
   description: String!
-  authorId: String!
   startingDate: DateScalar!
   endingDate: DateScalar!
   minSatPerVote: Int
@@ -350,8 +349,7 @@ type Query {
   getUserByUserName(userName: String): User
   getUserByEmail(email: String): User
   getPollOption(id: String): PollOption
-  getCampaign(id: String): Campaign
-  getCampaignAll(id: String): CampaignAll
+  getCampaign(id: String): CampaignAll
   getCampaigns(uid: String, campaignType: CampaignType): [Campaign]
   # getCampaignsVoted(id: String): [Campaign]
   getCampaignsVoted(uid: String): getVotedQueryResponse
