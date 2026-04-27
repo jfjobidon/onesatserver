@@ -81,6 +81,9 @@ web_modules/
 # Firebase service account key
 firebase-service-account.json
 
+# Client-facing specs (generated/maintained for Claude client; not needed in repo history)
+documentations/specs-for-client/
+
 # dotenv environment variable files
 .env
 .env.development.local
