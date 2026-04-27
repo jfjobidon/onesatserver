@@ -29,14 +29,14 @@ import {
 
 // const UsersDB: Omit<Required<User>, "__typename">[] = usersData
 
-const minSatPerVoteDefault = config.get<string>('minSatPerVoteDefault') 
-const maxSatPerVoteDefault = config.get<string>('maxSatPerVoteDefault') 
-const suggestedSatPerVoteDefault = config.get<string>('suggestedSatPerVoteDefault') 
-const campaignPausedDefault = config.get<string>('campaignPausedDefault') 
-const blindAmountDefault = config.get<string>('blindAmount')
-const blindRankDefault = config.get<string>('blindRank') 
-const blindVoteDefault = config.get<string>('blindVote') 
-const allowMultipleVotesDefault = config.get<string>('allowMultipleVotes') 
+const minSatPerVoteDefault = config.get<number>('minSatPerVoteDefault')
+const maxSatPerVoteDefault = config.get<number>('maxSatPerVoteDefault')
+const suggestedSatPerVoteDefault = config.get<number>('suggestedSatPerVoteDefault')
+const campaignPausedDefault = config.get<boolean>('campaignPausedDefault')
+const blindAmountDefault = config.get<boolean>('blindAmount')
+const blindRankDefault = config.get<boolean>('blindRank')
+const blindVoteDefault = config.get<boolean>('blindVote')
+const allowMultipleVotesDefault = config.get<boolean>('allowMultipleVotes')
 // console.log("minSatPerVoteDefault " + minSatPerVoteDefault)
 // console.log("maxSatPerVoteDefault " + maxSatPerVoteDefault)
 // console.log("suggestedSatPerVoteDefault " + suggestedSatPerVoteDefault)
@@ -228,7 +228,10 @@ export class DataSourcesMongo {
         const sats = await dataSourcesRedis.getSatsForCampaign(campaignId)
         const nbVotes = await dataSourcesRedis.getNbVotesForCampaign(campaignId)
         const nbViews = await dataSourcesRedis.getNbViewsForCampaign(campaignId)
-        return {...campaign, sats: sats, votes: nbVotes, views: nbViews}
+        // isFavorite/isVoted are user-relative: stub at false here (the graphql
+        // layer can override per-viewer if needed). Schema declares them Boolean!
+        // so we MUST return them.
+        return {...campaign, sats: sats, votes: nbVotes, views: nbViews, isFavorite: false, isVoted: false}
       }
     }
     catch(error) {
@@ -485,7 +488,7 @@ export class DataSourcesMongo {
         const sats = await dataSourcesRedis.getSatsForPoll(poll.id)
         const votes = await dataSourcesRedis.getNbVotesForPoll(poll.id)
         const views = await dataSourcesRedis.getNbViewsForPoll(poll.id)
-        polls.push({...poll, startingDate: campaign.startingDate, endingDate: campaign.endingDate, sats, votes, views})
+        polls.push({...poll, startingDate: campaign.startingDate, endingDate: campaign.endingDate, sats, votes, views, pollOptions: []})
       }
       // by default: sorting polls by sats DESC
       polls.sort(function(a, b) {
@@ -757,12 +760,15 @@ export class DataSourcesMongo {
           suggestedSatPerVote: updated.suggestedSatPerVote,
           paused: updated.paused,
           status: updated.status,
+          isPrivate: updated.isPrivate,
           blindAmount: updated.blindAmount,
           blindRank: updated.blindRank,
           blindVote: updated.blindVote,
           allowMultipleVotes: updated.allowMultipleVotes,
           creationDate: updated.creationDate,
           updatedDate: updated.updatedDate,
+          isFavorite: false,
+          isVoted: false,
           sats: 0,
           votes: 0,
           views: 0
@@ -1030,7 +1036,10 @@ export class DataSourcesMongo {
       }
       // DEBUG: error si le champ n'existe pas DEBUG:
       // console.table(pollOptions)
-      campaignsStats.push({...campaign, sats: <number>sats})
+      // isFavorite/isVoted/views/votes are required by the Campaign type
+      // but not computed here — stub at safe defaults; per-viewer enrichment
+      // can happen in the resolver layer if/when needed.
+      campaignsStats.push({...campaign, sats: <number>sats, isFavorite: false, isVoted: false, votes: 0, views: 0})
       // const pollOptions = await this.getPollOptionsForPoll(pollAll.id)
     }
 

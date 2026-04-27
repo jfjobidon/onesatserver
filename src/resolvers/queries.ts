@@ -27,7 +27,9 @@ const queries: QueryResolvers = {
     const results = Object.create(null) // Or just '{}', an empty object
 
     for (const name of Object.keys(nets)) {
-      for (const net of nets[name]) {
+      const ifs = nets[name]
+      if (!ifs) continue
+      for (const net of ifs) {
           // Skip over non-IPv4 and internal (i.e. 127.0.0.1) addresses
           // 'IPv4' is in Node <= 17, from 18 it's a number 4 or 6
           const familyV4Value = typeof net.family === 'string' ? 'IPv4' : 4
@@ -66,6 +68,7 @@ const queries: QueryResolvers = {
   },
 
   getUserById: async (_, args) => {
+    if (!args.id) return null
     const user = await dataSourcesMongo.getUserById(args.id)
     if (user === null) {
       return null
@@ -74,6 +77,7 @@ const queries: QueryResolvers = {
   },
 
   getUserName: async (_, args) => {
+    if (!args.uid) return null
     const userName = await dataSourcesMongo.getUserName(args.uid)
     if (userName === null) {
       return null
@@ -82,21 +86,24 @@ const queries: QueryResolvers = {
   },
 
   getSatsBalance: async (_, args) => {
+    if (!args.uid) return 0
     return await dataSourcesRedis.getSatsBalance(args.uid)
   },
 
   getFavorites: async (_, args): Promise<GetFavoritesQueryResponse> => {
     // add/remove elementId in user.isfavorite
     console.log("getFavorites uid: ", args)
+    if (!args.uid) return { favorites: [] }
     const favoriteResponse = await dataSourcesMongo.getFavorites(args.uid)
     return {
       favorites: favoriteResponse
     }
   },
-  
+
   getVoted: async (_, args): Promise<GetVotedQueryResponse> => {
     // add/remove elementId in user.isfavorite
     // console.log("getVoted uid: ", args)
+    if (!args.uid) return { voted: [] }
     const campaignIds = await dataSourcesRedis.getVoted(args.uid)
     return {
       voted: campaignIds
@@ -104,7 +111,8 @@ const queries: QueryResolvers = {
   },
 
   getCampaigns: async(_, args) => {
-    const campaigns = await dataSourcesMongo.getCampaigns(args.uid, args.campaignType)
+    if (!args.uid) return []
+    const campaigns = await dataSourcesMongo.getCampaigns(args.uid, args.campaignType ?? "ALL")
     return campaigns
   },
 
@@ -118,6 +126,7 @@ const queries: QueryResolvers = {
     // Get the array of campaignIds that the user has voted for
     console.log("111111")
     console.log("args.uid", args.uid)
+    if (!args.uid) return { voted: [] }
     const campaignIds = await dataSourcesRedis.getVoted(args.uid)
     console.log("22222")
     console.log("getCampaignsVoted", campaignIds)
@@ -164,26 +173,31 @@ const queries: QueryResolvers = {
   },
 
   getUserByUserName: async (_, args) => {
+    if (!args.userName) return null
     const user = await dataSourcesMongo.getUserByUserName(args.userName)
     return { ...user }
   },
 
   getPollOption: async (_, args) => {
+    if (!args.id) return null
     const pollOption = await dataSourcesMongo.getPollOption(args.id)
     return pollOption
   },
 
   getPoll: async (_, args) => {
+    if (!args.id) return null
     const poll = await dataSourcesMongo.getPoll(args.id)
     return poll
   },
 
   getPollsForCampaign: async (_, args) => {
+    if (!args.campaignId) return []
     const polls = await dataSourcesMongo.getPollsForCampaign(args.campaignId)
     return polls
   },
 
   getPollOptionsForPoll: async (_, args) => {
+    if (!args.pollId) return []
     const pollOptions = await dataSourcesMongo.getPollOptionsForPoll(args.pollId)
     return pollOptions
   },
@@ -191,7 +205,9 @@ const queries: QueryResolvers = {
   getUserByEmail: async (_, args, contextValue) => {
     // console.log("contextValue: ", contextValue.token)
     // TODO: check permissions...
+    if (!args.email) return null
     const user = await dataSourcesMongo.getUserByEmail(args.email)
+    if (user === null) return null
     return { ...user }
   },
 
@@ -231,28 +247,34 @@ const queries: QueryResolvers = {
 
   getVotesForCampaign: async (_, {campaignId, uid}) => {
     // console.log("getVotesForCampaign from client")
-    return await dataSourcesRedis.getVotesForCampaign(campaignId, uid)
+    if (!campaignId) return { votes: [] }
+    return await dataSourcesRedis.getVotesForCampaign(campaignId, uid ?? "")
   },
 
   getUserVotesForCampaign: async (_, {campaignId, uid}) => {
-    return dataSourcesRedis.getUserVotesForCampaign(campaignId, uid)
+    if (!campaignId) return { votes: [] }
+    return dataSourcesRedis.getUserVotesForCampaign(campaignId, uid ?? "")
   },
-  
+
   getVotesForPoll: async (_, {pollId, uid}) => {
-    return await dataSourcesRedis.getVotesForPoll(pollId, uid)
+    if (!pollId) return { votes: [] }
+    return await dataSourcesRedis.getVotesForPoll(pollId, uid ?? "")
   },
-  
+
   getVotesForPollOption: async (_, {pollOptionId}) => {
     // console.log("getVotesForPollOption from client")
+    if (!pollOptionId) return { votes: [] }
     return await dataSourcesRedis.getVotesForPollOption(pollOptionId)
   },
-  
+
   getVotesForUser: async (_, args) => {
     console.log("getVotesForUser from client")
+    if (!args.uid) return { votes: [] }
     return await dataSourcesRedis.getVotesForUser(args.uid)
   },
 
   getVoteById: async (_, args) => {
+    if (!args.id) return null
     return dataSourcesRedis.getVoteById(args.id)
   },
 }

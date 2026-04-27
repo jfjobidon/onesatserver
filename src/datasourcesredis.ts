@@ -15,7 +15,6 @@ import randomstring from "randomstring"
 
 import { Vote, VoteInput, AddVoteMutationResponse, GetVotesQueryResponse } from "./__generated__/resolvers-types"
 import { userVotedSchema, voteSchema, satsPollOptionSchema, votesPollOptionSchema, viewsPollOptionSchema, satsPollSchema, votesPollSchema, viewsPollSchema, satsCampaignSchema, votesCampaignSchema, viewsCampaignSchema, satsUserSchema, activitySchema } from './schema.redis.js'
-import { UUID } from 'graphql-scalars/typings/mocks'
 
 let voteRepository = new Repository(voteSchema, redisClient)
 // await voteRepository.dropIndex()
@@ -70,7 +69,11 @@ export class DataSourcesRedis {
     console.log('addVote entityId: ', vote[EntityId])
     console.log('addVote entityKeyName: ', vote[EntityKeyName])
     // const exists = await redisClient.exists(`vote:${vote[EntityId]}`)
-    const exists = await redisClient.exists(vote[EntityKeyName])
+    const entityKey = vote[EntityKeyName]
+    if (!entityKey) {
+      return { code: 500, success: false, message: "Vote saved but no entity key returned by Redis", vote: null }
+    }
+    const exists = await redisClient.exists(entityKey)
     if (exists) {
       // REVIEW: quoi faire si return false ???
       await this.incrPollOption(voteInput.pollOptionId, voteInput.sats)
@@ -133,7 +136,7 @@ export class DataSourcesRedis {
         const pollOption2: Entity = await satsPollOptionRepository.save({ "pollOptionId": pollOptionId, sats: sats })
         // console.log(pollOption2)
       } else {
-        satsPollOption[0].sats = (sats + parseInt(satsPollOption[0].sats.toString()))
+        satsPollOption[0].sats = (sats + parseInt(satsPollOption[0].sats!.toString()))
         satsPollOptionRepository.save(satsPollOption[0])
       }
       // increments votes for PollOption
@@ -144,7 +147,7 @@ export class DataSourcesRedis {
         const votesPollOption2: Entity = await votesPollOptionRepository.save({ "pollOptionId": pollOptionId, votes: 1 })
         // console.log(votesPollOption2)
       } else {
-        votesPollOption[0].votes = (1 + parseInt(votesPollOption[0].votes.toString()))
+        votesPollOption[0].votes = (1 + parseInt(votesPollOption[0].votes!.toString()))
         votesPollOptionRepository.save(votesPollOption[0])
       }
       // TODO: remove this: just for debugging now
@@ -157,7 +160,7 @@ export class DataSourcesRedis {
         const viewsPollOption2: Entity = await viewsPollOptionRepository.save({ "pollOptionId": pollOptionId, views: 1 })
         // console.log(viewsPollOption2)
       } else {
-        viewsPollOption[0].views = (1 + parseInt(viewsPollOption[0].views.toString()))
+        viewsPollOption[0].views = (1 + parseInt(viewsPollOption[0].views!.toString()))
         viewsPollOptionRepository.save(viewsPollOption[0])
       }
     } catch (err) {
@@ -184,7 +187,7 @@ export class DataSourcesRedis {
         const poll2: Entity = await satsPollRepository.save({ "pollId": pollId, sats: sats })
         // console.log(poll2)
       } else {
-        satsPoll[0].sats = (sats + parseInt(satsPoll[0].sats.toString()))
+        satsPoll[0].sats = (sats + parseInt(satsPoll[0].sats!.toString()))
         satsPollRepository.save(satsPoll[0])
       }
 
@@ -196,7 +199,7 @@ export class DataSourcesRedis {
         const votesPoll2: Entity = await votesPollRepository.save({ "pollId": pollId, votes: 1 })
         // console.log(votesPoll2)
       } else {
-        votesPoll[0].votes = (1 + parseInt(votesPoll[0].votes.toString()))
+        votesPoll[0].votes = (1 + parseInt(votesPoll[0].votes!.toString()))
         votesPollRepository.save(votesPoll[0])
       }
 
@@ -208,7 +211,7 @@ export class DataSourcesRedis {
         const viewsPoll2: Entity = await viewsPollRepository.save({ "pollId": pollId, views: 1 })
         // console.log(viewsPoll2)
       } else {
-        viewsPoll[0].views = (1 + parseInt(viewsPoll[0].views.toString()))
+        viewsPoll[0].views = (1 + parseInt(viewsPoll[0].views!.toString()))
         viewsPollRepository.save(viewsPoll[0])
       }
     } catch (err) {
@@ -224,7 +227,7 @@ export class DataSourcesRedis {
     if (satCampaign.length == 0) {
       sats = 0
     } else {
-      sats = parseInt((satCampaign[0].sats).toString())
+      sats = parseInt((satCampaign[0].sats!).toString())
     }
     return sats
   }
@@ -235,7 +238,7 @@ export class DataSourcesRedis {
     if (satsPoll.length == 0) {
       sats = 0
     } else {
-      sats = parseInt((satsPoll[0].sats).toString())
+      sats = parseInt((satsPoll[0].sats!).toString())
     }
     return sats
   }
@@ -243,7 +246,7 @@ export class DataSourcesRedis {
   async getSatsBalance(uid: string): Promise<number> {
     const satsUser: Entity[] = await satsUserRepository.search().where('uid').equals(uid).return.all()
     if (satsUser.length == 0) return 0
-    return parseInt((satsUser[0].sats).toString())
+    return parseInt((satsUser[0].sats!).toString())
   }
 
   async getNbVotesForCampaign(campaignId: string): Promise<number> {
@@ -252,11 +255,11 @@ export class DataSourcesRedis {
     if (voteCampaign.length == 0) {
       nbVotes = 0
     } else {
-      nbVotes = parseInt((voteCampaign[0].votes).toString())
+      nbVotes = parseInt((voteCampaign[0].votes!).toString())
     }
     return nbVotes
   }
-  
+
   async getNbVotesForPoll(pollId: string): Promise<number> {
     const votePoll: Entity[] = await votesPollRepository.search().where('pollId').equals(pollId).return.all()
     let nbVotes: number
@@ -264,7 +267,7 @@ export class DataSourcesRedis {
     if (votePoll.length == 0) {
       nbVotes = 0
     } else {
-      nbVotes = parseInt((votePoll[0].votes).toString())
+      nbVotes = parseInt((votePoll[0].votes!).toString())
     }
     return nbVotes
   }
@@ -276,7 +279,7 @@ export class DataSourcesRedis {
     if (viewsPoll.length == 0) {
       views = 0
     } else {
-      views = parseInt((viewsPoll[0].views).toString())
+      views = parseInt((viewsPoll[0].views!).toString())
     }
     return views
   }
@@ -287,7 +290,7 @@ export class DataSourcesRedis {
     if (viewsCampaign.length == 0) {
       nbViews = 0
     } else {
-      nbViews = parseInt((viewsCampaign[0].views).toString())
+      nbViews = parseInt((viewsCampaign[0].views!).toString())
     }
     return nbViews
   }
@@ -370,7 +373,7 @@ export class DataSourcesRedis {
         // console.log(campaign2)
       } else {
         // before
-        let beforeSatsCampaign = parseInt(satsCampaign[0].sats.toString())
+        let beforeSatsCampaign = parseInt(satsCampaign[0].sats!.toString())
         const beforeSatsUser = Math.floor(beforeSatsCampaign / 2) + 1
         const beforeSatsOSOV = beforeSatsCampaign - beforeSatsUser
         // after
@@ -393,7 +396,7 @@ export class DataSourcesRedis {
         const votesCampaign2: Entity = await votesCampaignRepository.save({ "campaignId": campaignId, votes: 1 })
         // console.log(votesCampaign2)
       } else {
-        votesCampaign[0].votes = (1 + parseInt(votesCampaign[0].votes.toString()))
+        votesCampaign[0].votes = (1 + parseInt(votesCampaign[0].votes!.toString()))
         votesCampaignRepository.save(votesCampaign[0])
       }
 
@@ -405,7 +408,7 @@ export class DataSourcesRedis {
         const viewsCampaign2: Entity = await viewsCampaignRepository.save({ "campaignId": campaignId, views: 1 })
         // console.log(viewsCampaign2)
       } else {
-        viewsCampaign[0].views = (1 + parseInt(viewsCampaign[0].views.toString()))
+        viewsCampaign[0].views = (1 + parseInt(viewsCampaign[0].views!.toString()))
         viewsCampaignRepository.save(viewsCampaign[0])
       }
 
@@ -427,7 +430,7 @@ export class DataSourcesRedis {
         const satsUser2: Entity = await satsUserRepository.save({ "uid": uid, sats: sats })
         // console.log(satsUser2)
       } else {
-        satsUser[0].sats = (sats + parseInt(satsUser[0].sats.toString()))
+        satsUser[0].sats = (sats + parseInt(satsUser[0].sats!.toString()))
         satsUserRepository.save(satsUser[0])
       }
     } catch (err) {
@@ -511,7 +514,7 @@ export class DataSourcesRedis {
     if (satsPollOption.length == 0) {
       sats = 0
     } else {
-      sats = parseInt((satsPollOption[0].sats).toString())
+      sats = parseInt((satsPollOption[0].sats!).toString())
     }
     return sats
   }
@@ -522,12 +525,12 @@ export class DataSourcesRedis {
     if (nbVotesPollOption.length == 0) {
       nbVotes = 0
     } else {
-      nbVotes = parseInt((nbVotesPollOption[0].votes).toString())
+      nbVotes = parseInt((nbVotesPollOption[0].votes!).toString())
     }
     return nbVotes
   }
 
-  
+
   async getNbViewsForPollOption(pollOptionId: string): Promise<number> {
     // console.log("pollOptionId", pollOptionId)
     const viewsPollOption: Entity[] = await viewsPollOptionRepository.search().where('pollOptionId').equals(pollOptionId).return.all()
@@ -535,7 +538,7 @@ export class DataSourcesRedis {
     if (viewsPollOption.length == 0) {
       views = 0
     } else {
-      views = parseInt((viewsPollOption[0].views).toString())
+      views = parseInt((viewsPollOption[0].views!).toString())
     }
     return views
   }
@@ -548,7 +551,7 @@ export class DataSourcesRedis {
     return { votes: votesResponse }
   }
 
-  async getVoteById(voteId: string): Promise<Vote> {
+  async getVoteById(voteId: string): Promise<Vote | null> {
     const exists = await redisClient.exists(`vote:${voteId}`)
     if (exists) {
       let vote = await voteRepository.fetch(voteId)

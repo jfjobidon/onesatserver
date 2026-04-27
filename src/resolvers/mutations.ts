@@ -179,7 +179,16 @@ const mutations: MutationResolvers = {
     // add/remove elementId in user.isfavorite
     // console.log("favoriteElement: ", favoriteInput.uid, favoriteInput.elementId, favoriteInput.isFavorite)
     // console.log("favoriteElement")
-    const favoriteResponse = await dataSourcesMongo.favoriteElement({...favoriteInput})
+    if (!favoriteInput || !favoriteInput.uid || !favoriteInput.elementId || favoriteInput.isFavorite == null) {
+      throw new GraphQLError('favoriteInput.uid, elementId and isFavorite are required', {
+        extensions: { code: 'BAD_USER_INPUT', http: { status: 400 } },
+      })
+    }
+    const favoriteResponse = await dataSourcesMongo.favoriteElement({
+      uid: favoriteInput.uid,
+      elementId: favoriteInput.elementId,
+      isFavorite: favoriteInput.isFavorite,
+    })
     return favoriteResponse
     // return {
     //   code: favoriteResponse.code,
@@ -203,7 +212,16 @@ const mutations: MutationResolvers = {
 
   signup: async (_, { userInput }): Promise<UserMutationResponse> => {
     console.log("mutation signup....")
-    const userMutationResponse = await dataSourcesMongo.signup({...userInput})
+    if (!userInput || !userInput.email || !userInput.uid || !userInput.userName) {
+      throw new GraphQLError('userInput.email, uid and userName are required', {
+        extensions: { code: 'BAD_USER_INPUT', http: { status: 400 } },
+      })
+    }
+    const userMutationResponse = await dataSourcesMongo.signup({
+      email: userInput.email,
+      uid: userInput.uid,
+      userName: userInput.userName,
+    })
     return {
       code: userMutationResponse.code,
       success: userMutationResponse.success,
@@ -215,6 +233,16 @@ const mutations: MutationResolvers = {
   accountFunding: async (_, { fundingInput }, context): Promise<FundingMutationResponse> => {
     console.log("account funding...")
     console.table(context)
+    if (!context.userId) {
+      throw new GraphQLError('Not authenticated', {
+        extensions: { code: 'UNAUTHENTICATED', http: { status: 401 } },
+      })
+    }
+    if (!fundingInput) {
+      throw new GraphQLError('fundingInput is required', {
+        extensions: { code: 'BAD_USER_INPUT', http: { status: 400 } },
+      })
+    }
     let af = await dataSourcesMongo.accountFunding(context.userId, fundingInput)
     console.log("accountFunding return: ", af)
     return af
@@ -268,6 +296,11 @@ const mutations: MutationResolvers = {
   createPoll: async (_, { pollInput }, context): Promise<PollMutationResponse> => {
     // console.log("create poll")
     // console.log(context)
+    if (!pollInput) {
+      throw new GraphQLError('pollInput is required', {
+        extensions: { code: 'BAD_USER_INPUT', http: { status: 400 } },
+      })
+    }
     let pollMutationResponse = await dataSourcesMongo.createPoll(pollInput)
     // console.log("createPoll return: ", pollMutationResponse)
     return pollMutationResponse
@@ -276,6 +309,16 @@ const mutations: MutationResolvers = {
   createPollOption: async (_, { pollOptionInput }, context): Promise<PollOptionMutationResponse> => {
     console.log("create poll option")
     console.log(context)
+    if (!context.userId) {
+      throw new GraphQLError('Not authenticated', {
+        extensions: { code: 'UNAUTHENTICATED', http: { status: 401 } },
+      })
+    }
+    if (!pollOptionInput) {
+      throw new GraphQLError('pollOptionInput is required', {
+        extensions: { code: 'BAD_USER_INPUT', http: { status: 400 } },
+      })
+    }
     let pollOption = await dataSourcesMongo.createPollOption(context.userId, pollOptionInput)
     console.log("createPollOption return: ", pollOption)
     return pollOption
@@ -284,6 +327,11 @@ const mutations: MutationResolvers = {
   togglePausePoll: async (_, { pausePollInput }, context): Promise<PauseMutationResponse> => {
     console.log("toggle pause poll")
     console.log(context)
+    if (!pausePollInput) {
+      throw new GraphQLError('pausePollInput is required', {
+        extensions: { code: 'BAD_USER_INPUT', http: { status: 400 } },
+      })
+    }
     let campaignStatus = await dataSourcesMongo.togglePausePoll(pausePollInput)
     console.log("togglePausePoll return: ", campaignStatus)
     return campaignStatus
@@ -292,6 +340,11 @@ const mutations: MutationResolvers = {
   togglePauseCampaign: async (_, { pauseCampaignInput }, context): Promise<PauseMutationResponse> => {
     console.log("toggle pause campaign")
     console.log(context)
+    if (!pauseCampaignInput) {
+      throw new GraphQLError('pauseCampaignInput is required', {
+        extensions: { code: 'BAD_USER_INPUT', http: { status: 400 } },
+      })
+    }
     let campaignStatus = await dataSourcesMongo.togglePauseCampaign(pauseCampaignInput)
     console.log("togglePauseCampaign return: ", campaignStatus)
     return campaignStatus
