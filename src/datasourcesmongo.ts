@@ -52,6 +52,8 @@ import { DataSourcesRedis } from "./datasourcesredis.js"
 import { validateSatsMax, validateSatsMin } from "./utils/satsBounds.js"
 import { validateTitle, validateDescription, normalizeText } from "./utils/textBounds.js"
 import { validateCampaignDates } from "./utils/dateBounds.js"
+import { validateUsername } from "./utils/userBounds.js"
+import { validateEmail } from "./utils/emailBounds.js"
 // import { CampaignType } from "./utils/types"
 const dataSourcesRedis = new DataSourcesRedis()
 // import { describe } from "node:test"
@@ -1065,11 +1067,35 @@ export class DataSourcesMongo {
   }
 
   async signup(userInput: UserInput): Promise<UserMutationResponse> {
+    // 1. Format validation (length, charset, reserved). Uniqueness is handled
+    //    by the DB unique indexes on userName / userNameLower / email below.
+    //    Defense in depth: Firebase already validates email at sign-up, but the
+    //    GraphQL mutation is independent — we MUST revalidate at the trust boundary.
+    const emailErr = validateEmail(userInput.email)
+    if (emailErr) {
+      return { code: "400", success: false, message: emailErr, user: null }
+    }
+    const usernameErr = validateUsername(userInput.userName)
+    if (usernameErr) {
+      return { code: "400", success: false, message: usernameErr, user: null }
+    }
+
+    // 2. Normalize. userName casing is preserved as the user typed it;
+    //    userNameLower drives case-insensitive uniqueness. Email is stored
+    //    lowercase (Firebase already does this, we mirror it for defense in depth).
+    const userNameTrimmed = userInput.userName.trim()
+    const userNameLower = userNameTrimmed.toLowerCase()
+    const emailLower = userInput.email.trim().toLowerCase()
+
+    // 3. Insert + map Prisma unique-constraint violations to UX-friendly messages.
     try {
-      let userResponse = await prisma.user.create({
+      const userResponse = await prisma.user.create({
         data: {
-          ...userInput
-        }
+          email: emailLower,
+          userName: userNameTrimmed,
+          userNameLower,
+          uid: userInput.uid,
+        },
       })
       return {
         code: "200",
@@ -1077,7 +1103,20 @@ export class DataSourcesMongo {
         message: "New user created!",
         user: { ...userResponse },
       }
-    } catch (err) {
+    } catch (err: any) {
+      // P2002 = unique constraint violation. err.meta.target lists the field(s).
+      if (err?.code === "P2002") {
+        const target = Array.isArray(err.meta?.target)
+          ? err.meta.target.join(",")
+          : String(err.meta?.target ?? "")
+        if (target.includes("userNameLower") || target.includes("userName")) {
+          return { code: "409", success: false, message: "Username already taken", user: null }
+        }
+        if (target.includes("email")) {
+          return { code: "409", success: false, message: "Email already registered", user: null }
+        }
+        return { code: "409", success: false, message: "A unique field collision occurred", user: null }
+      }
       console.log(err)
       return {
         code: "500",

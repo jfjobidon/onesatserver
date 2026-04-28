@@ -5,6 +5,7 @@
 import {
   MAX_CAMPAIGN_START_AHEAD_MS,
   MAX_CAMPAIGN_DURATION_MS,
+  MIN_CAMPAIGN_DURATION_MS,
   STARTING_DATE_GRACE_MS,
 } from '../config/AppConfig.js'
 
@@ -48,6 +49,13 @@ export const validateCampaignDates = (
   // 5. Duration too long.
   if (endingDate.getTime() - startingDate.getTime() > MAX_CAMPAIGN_DURATION_MS) {
     return 'Campaign duration cannot exceed 1 year'
+  }
+
+  // 5b. Duration too short.
+  // Prevents race conditions with the status cron (60s polling) and rejects
+  // accidental same-minute campaigns (typo, dates rounded to same minute).
+  if (endingDate.getTime() - startingDate.getTime() < MIN_CAMPAIGN_DURATION_MS) {
+    return 'Campaign duration must be at least 5 minutes'
   }
 
   return null

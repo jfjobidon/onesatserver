@@ -14,6 +14,7 @@ import {
 } from './setup.js'
 import {
   MAX_CAMPAIGN_DURATION_MS,
+  MIN_CAMPAIGN_DURATION_MS,
 } from '../../src/config/AppConfig.js'
 
 const CREATE_CAMPAIGN = `
@@ -186,6 +187,39 @@ describe('createCampaign mutation (integration)', () => {
     const result = unwrap(res)
     expect(result.data.createCampaign.code).toBe('400')
     expect(result.data.createCampaign.message).toBe('Campaign duration cannot exceed 1 year')
+  })
+
+  // 6b. Duration exactly at the 5-minute minimum (boundary, succeeds)
+  it('accepts duration exactly at the 5-minute minimum', async () => {
+    const user = await createTestUser()
+    const start = Date.now() + 24 * 60 * 60 * 1000 // +1d
+    const end = start + MIN_CAMPAIGN_DURATION_MS // exactly 5 min after start
+    const res = await executeAsUser(
+      server,
+      CREATE_CAMPAIGN,
+      { campaignInput: validInput({ startingDate: start, endingDate: end }) },
+      user.uid,
+    )
+    const result = unwrap(res)
+    expect(result.data.createCampaign.code).toBe('200')
+    expect(result.data.createCampaign.success).toBe(true)
+  })
+
+  // 6c. Duration 1ms under the 5-minute minimum
+  it('rejects duration under 5 minutes', async () => {
+    const user = await createTestUser()
+    const start = Date.now() + 24 * 60 * 60 * 1000 // +1d
+    const end = start + MIN_CAMPAIGN_DURATION_MS - 1 // 1ms below the floor
+    const res = await executeAsUser(
+      server,
+      CREATE_CAMPAIGN,
+      { campaignInput: validInput({ startingDate: start, endingDate: end }) },
+      user.uid,
+    )
+    const result = unwrap(res)
+    expect(result.data.createCampaign.code).toBe('400')
+    expect(result.data.createCampaign.success).toBe(false)
+    expect(result.data.createCampaign.message).toBe('Campaign duration must be at least 5 minutes')
   })
 
   // 7. campaignInput absent

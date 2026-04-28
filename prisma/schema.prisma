@@ -53,10 +53,11 @@ model Campaign {
 
 // data DateTime @default("2020-03-19T14:21:00+02:00")
 model User {
-  id           String     @id @default(auto()) @map("_id") @db.ObjectId
-  email        String     @unique
-  userName     String     @unique
-  uid          String     @unique // Firebase uid
+  id            String     @id @default(auto()) @map("_id") @db.ObjectId
+  email         String     @unique  // stored lowercase for case-insensitive uniqueness
+  userName      String     @unique  // display value, casing preserved as the user typed it
+  userNameLower String     @unique  // userName.toLowerCase() — used for case-insensitive uniqueness
+  uid           String     @unique  // Firebase uid
   roles        String[]   @default(["USER"])
   campaigns    Campaign[]
   favorites    String[]   @default([])

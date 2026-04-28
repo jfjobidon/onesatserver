@@ -75,7 +75,9 @@ export async function createTestUser(overrides: Partial<{ email: string; userNam
   const email = overrides.email ?? `test-${userCounter}-${Date.now()}@osov.test`
   const userName = overrides.userName ?? `testuser-${userCounter}-${Date.now()}`
   const uid = overrides.uid ?? `test-uid-${userCounter}-${Date.now()}`
-  await prismaTest.user.create({ data: { email, userName, uid } })
+  // userNameLower mirrors the production signup flow: the Prisma model now requires
+  // it as a @unique field for case-insensitive collision detection.
+  await prismaTest.user.create({ data: { email, userName, userNameLower: userName.toLowerCase(), uid } })
   return { uid, email, userName }
 }
 

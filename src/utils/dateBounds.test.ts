@@ -6,6 +6,7 @@ import { validateCampaignDates } from './dateBounds.js'
 import {
   MAX_CAMPAIGN_START_AHEAD_MS,
   MAX_CAMPAIGN_DURATION_MS,
+  MIN_CAMPAIGN_DURATION_MS,
   STARTING_DATE_GRACE_MS,
 } from '../config/AppConfig.js'
 
@@ -97,7 +98,23 @@ describe('validateCampaignDates', () => {
     )
   })
 
-  // Case #11 — invalid start
+  // Case #11 — exact 5-minute minimum duration boundary
+  it('returns null at exact 5-minute minimum duration boundary', () => {
+    const start = offset(days(1))
+    const end = new Date(start.getTime() + MIN_CAMPAIGN_DURATION_MS) // exactly the floor
+    expect(validateCampaignDates(start, end, NOW)).toBeNull()
+  })
+
+  // Case #12 — 1ms below 5-minute minimum duration
+  it('returns "must be at least 5 minutes" at duration - 1ms', () => {
+    const start = offset(days(1))
+    const end = new Date(start.getTime() + MIN_CAMPAIGN_DURATION_MS - 1)
+    expect(validateCampaignDates(start, end, NOW)).toBe(
+      'Campaign duration must be at least 5 minutes',
+    )
+  })
+
+  // Case #13 — invalid start
   it('returns "Invalid starting date format" for NaN start', () => {
     const start = new Date('garbage') // NaN
     const end = offset(days(7))
@@ -106,7 +123,7 @@ describe('validateCampaignDates', () => {
     )
   })
 
-  // Case #12 — invalid end (start valid)
+  // Case #14 — invalid end (start valid)
   it('returns "Invalid ending date format" for NaN end', () => {
     const start = offset(days(1))
     const end = new Date('garbage')
@@ -115,7 +132,7 @@ describe('validateCampaignDates', () => {
     )
   })
 
-  // Case #13 — both invalid → start checked first
+  // Case #15 — both invalid → start checked first
   it('returns "Invalid starting date format" when both are NaN (start checked first)', () => {
     const start = new Date('garbage')
     const end = new Date('garbage')
