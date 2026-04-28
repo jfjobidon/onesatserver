@@ -81,6 +81,10 @@ web_modules/
 # Firebase service account key
 firebase-service-account.json
 
+# Mongo replica-set keyFile (must NEVER be committed — used as the shared
+# secret between replica members and Mongo's auth subsystem).
+.docker-secrets/
+
 # Local documentation (devDoc, audits, mutation specs, client specs).
 # Kept local — not needed in repo history.
 documentation/

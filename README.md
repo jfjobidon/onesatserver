@@ -51,23 +51,72 @@ The `mongo` image declares two volumes in its Dockerfile:
 
 Both must be mapped to **named** volumes; otherwise Docker creates anonymous volumes (visible as a hash in Portainer) for `/data/configdb`. We use the convention `<container-name>-data` for `/data/db` and `<container-name>-configdb-data` for `/data/configdb`.
 
-### Create the dev container
+### Create the dev container (with auth)
+
+The dev container enforces auth — any connection (Compass, Prisma, mongosh) must provide credentials. Username and password live in `.env` (gitignored) as part of `DATABASE_URL`. **Never** put real credentials in `config/*.json` (those files are versioned).
+
+**Important :** Mongo refuses `--auth` together with `--replSet` unless a `--keyFile` is provided (it's the shared secret between replica-set members for internal authentication, even with a single member). So we must:
+1. Generate a random keyFile and store it in `.docker-secrets/` (gitignored).
+2. Mount it read-only into the container at `/etc/mongo-keyfile`.
+3. Run the container with the `mongodb` user (uid 999) so it can read the keyFile.
 
 ```bash
+# 1. Generate the keyFile (one-time setup; persists across container recreates).
+mkdir -p .docker-secrets
+openssl rand -base64 756 > .docker-secrets/mongo-keyfile
+chmod 400 .docker-secrets/mongo-keyfile
+
+# 2. Replace the values below with your own. They MUST match .env's DATABASE_URL.
+export MONGO_USERNAME=osovAdmin
+export MONGO_PASSWORD='<your-password>'  # generate with: openssl rand -hex 24
+                                          # (use -hex, not -base64, so the password is safe to embed
+                                          #  in DATABASE_URL without %-encoding the / + = chars)
+
+# 3. Run the container.
 docker run -d \
   --name osov-mongo-dev \
   -p 27017:27017 \
   -v osov-mongo-dev-data:/data/db \
   -v osov-mongo-dev-configdb-data:/data/configdb \
-  mongo:7 --replSet rs0 --bind_ip_all
-
-# Wait a few seconds for Mongo to be ready, then init the replica set:
-sleep 3
-docker exec osov-mongo-dev mongosh --quiet --eval \
-  "rs.initiate({_id:'rs0',members:[{_id:0,host:'localhost:27017'}]})"
+  -v "$(pwd)/.docker-secrets/mongo-keyfile:/etc/mongo-keyfile:ro" \
+  -e MONGO_INITDB_ROOT_USERNAME="$MONGO_USERNAME" \
+  -e MONGO_INITDB_ROOT_PASSWORD="$MONGO_PASSWORD" \
+  --user 999:999 \
+  mongo:7 --replSet rs0 --bind_ip_all --auth --keyFile /etc/mongo-keyfile
 ```
 
-`--bind_ip_all` is required for the container to accept connections from the host (otherwise it only listens on the container's loopback).
+**Then create the admin user and init the replica set.**
+
+If `/data/db` was empty (fresh volume), `MONGO_INITDB_ROOT_USERNAME/PASSWORD` automatically creates the admin user on first start. But if you reused an existing volume (the common case when re-creating the container), Mongo skips that step and you must create the user manually via the **localhost exception** (Mongo allows one unauthenticated localhost connection when no users exist yet):
+
+```bash
+sleep 5  # let Mongo finish booting
+
+# Create the admin user (skip this if you started with a fresh volume).
+docker exec osov-mongo-dev mongosh --quiet admin --eval '
+db.createUser({
+  user: "'"$MONGO_USERNAME"'",
+  pwd: "'"$MONGO_PASSWORD"'",
+  roles: [ { role: "root", db: "admin" } ]
+})'
+
+# Init the replica set (skip if rs0 already exists from a previous setup).
+docker exec osov-mongo-dev mongosh \
+  -u "$MONGO_USERNAME" -p "$MONGO_PASSWORD" --authenticationDatabase admin \
+  --quiet --eval "rs.initiate({_id:'rs0',members:[{_id:0,host:'localhost:27017'}]})"
+```
+
+- **`--auth`** — enforces authentication. Without it, anyone can connect anonymously.
+- **`--keyFile`** — internal cluster authentication (mandatory with `--replSet` + `--auth`).
+- **`--user 999:999`** — runs Mongo as the `mongodb` user (uid 999 inside the container), required because it must read the keyFile.
+- **`MONGO_INITDB_ROOT_*`** — only effective on a *fresh* `/data/db` volume.
+- **`--bind_ip_all`** — allows connections from the host (default is loopback only inside the container).
+- **`?authSource=admin`** in the connection string is required because the admin user lives in the `admin` database, not in `onesatonevote`.
+
+The matching `.env` entry:
+```env
+DATABASE_URL="mongodb://osovAdmin:<your-password>@localhost:27017/onesatonevote?replicaSet=rs0&directConnection=true&authSource=admin"
+```
 
 ### Create the test container
 
@@ -98,8 +147,14 @@ docker exec -it osov-mongo-dev mongosh    # open a shell
 ### Verify replica set
 
 ```bash
-docker exec osov-mongo-dev mongosh --quiet --eval "rs.status().myState"
+# dev (with auth)
+docker exec osov-mongo-dev mongosh \
+  -u "$MONGO_USERNAME" -p "$MONGO_PASSWORD" --authenticationDatabase admin \
+  --quiet --eval "rs.status().myState"
 # Should print: 1   (1 = PRIMARY)
+
+# test (no auth)
+docker exec osov-mongo-test mongosh --quiet --eval "rs.status().myState"
 ```
 
 ### Connection strings
@@ -108,8 +163,8 @@ The connection URL must include `replicaSet=rs0&directConnection=true`. `directC
 
 | Container | Connection string |
 |---|---|
-| `osov-mongo-dev` | `mongodb://localhost:27017/onesatonevote?replicaSet=rs0&directConnection=true` (in `.env` as `DATABASE_URL`) |
-| `osov-mongo-test` | `mongodb://localhost:27018/osov_test?replicaSet=rs0&directConnection=true` (in `.env.test` as `DATABASE_URL`) |
+| `osov-mongo-dev` | `mongodb://USER:PASS@localhost:27017/onesatonevote?replicaSet=rs0&directConnection=true&authSource=admin` (in `.env` as `DATABASE_URL`, USER/PASS from your local setup) |
+| `osov-mongo-test` | `mongodb://localhost:27018/osov_test?replicaSet=rs0&directConnection=true` (in `.env.test` as `DATABASE_URL`, no auth on test instance) |
 
 ## Redis Setup (Docker)
 
@@ -118,11 +173,16 @@ This project uses **redis/redis-stack** (includes RedisJSON and RediSearch, requ
 ### Create container with persistent volume
 
 ```bash
+# Replace with your own password — generate with: openssl rand -hex 24
+# (use -hex so the password is safe to embed in REDIS_URL without %-encoding).
+# It MUST match the password embedded in REDIS_URL inside .env.
+export REDIS_PASSWORD='<your-password>'
+
 docker run -d \
   --name osov-redis-dev \
   -p 6379:6379 \
   -v osov-redis-dev-data:/data \
-  -e REDIS_ARGS="--requirepass rRTGwNDL7a --save 60 1" \
+  -e REDIS_ARGS="--requirepass $REDIS_PASSWORD --save 60 1" \
   redis/redis-stack:latest
 ```
 
@@ -130,8 +190,13 @@ docker run -d \
 
 - **`-p 6379:6379`** — maps container port to localhost:6379 (what the app expects)
 - **`-v osov-redis-dev-data:/data`** — named volume that persists data across container restarts and recreates
-- **`--requirepass rRTGwNDL7a`** — sets the password to match the app config
+- **`--requirepass $REDIS_PASSWORD`** — sets the password (sourced from your local env, never committed)
 - **`--save 60 1`** — snapshot to disk every 60 seconds if at least 1 key changed. Without this, Redis only saves on graceful shutdown; a crash would lose all data since the last save
+
+The matching `.env` entry:
+```env
+REDIS_URL="redis://default:<your-password>@localhost:6379"
+```
 
 There is also a **test** instance for the integration test suite:
 
@@ -140,7 +205,7 @@ docker run -d \
   --name osov-redis-test \
   -p 6380:6379 \
   -v osov-redis-test-data:/data \
-  -e REDIS_ARGS="--requirepass rRTGwNDL7a --save 60 1" \
+  -e REDIS_ARGS="--requirepass $REDIS_PASSWORD --save 60 1" \
   redis/redis-stack:latest
 ```
 
@@ -164,7 +229,7 @@ docker run -d \
   --name osov-redis-dev \
   -p 6379:6379 \
   -v osov-redis-dev-data:/data \
-  -e REDIS_ARGS="--requirepass rRTGwNDL7a --save 60 1" \
+  -e REDIS_ARGS="--requirepass $REDIS_PASSWORD --save 60 1" \
   redis/redis-stack:latest
 ```
 
@@ -173,7 +238,7 @@ The named volume `osov-redis-dev-data` survives the container removal, so data i
 ### Connect with redis-cli
 
 ```bash
-docker exec -it osov-redis-dev redis-cli -a rRTGwNDL7a
+docker exec -it osov-redis-dev redis-cli -a "$REDIS_PASSWORD"
 ```
 
 ## Architecture
@@ -288,7 +353,16 @@ Current shared constraints (validators present on both sides):
 | Starting date ≤ now + 6 months | `MAX_CAMPAIGN_START_AHEAD_MS = 182 * 24 * 60 * 60 * 1000` | [`utils/dateBounds.ts`](src/utils/dateBounds.ts) `validateCampaignDates` | inline in `CreateCampaignScreen` |
 | Campaign duration ≤ 1 year | `MAX_CAMPAIGN_DURATION_MS = 365 * 24 * 60 * 60 * 1000` | [`utils/dateBounds.ts`](src/utils/dateBounds.ts) `validateCampaignDates` | inline in `CreateCampaignScreen` |
 | End date > start date | — | [`utils/dateBounds.ts`](src/utils/dateBounds.ts) `validateCampaignDates` | form check |
+| Campaign duration ≥ 5 minutes | `MIN_CAMPAIGN_DURATION_MS = 5 * 60 * 1000` | [`utils/dateBounds.ts`](src/utils/dateBounds.ts) `validateCampaignDates` | inline in `CreateCampaignScreen` |
 | `min ≤ suggested ≤ max` sats | — | `createCampaign` | form check |
+| Username min length | `MIN_USERNAME_LENGTH = 3` | [`utils/userBounds.ts`](src/utils/userBounds.ts) `validateUsername` | mirror in `onesatclient/utils/userBounds.ts` |
+| Username max length | `MAX_USERNAME_LENGTH = 30` | [`utils/userBounds.ts`](src/utils/userBounds.ts) `validateUsername` | idem |
+| Username charset (alphanumeric + `_` `-`) | `USERNAME_CHARSET_REGEX` | [`utils/userBounds.ts`](src/utils/userBounds.ts) `validateUsername` | idem |
+| Reserved usernames (case-insensitive) | `RESERVED_USERNAMES` | [`utils/userBounds.ts`](src/utils/userBounds.ts) `validateUsername` | idem |
+| Username uniqueness (case-insensitive) | — | Prisma `@unique` on `userNameLower` (lowercased copy) | form pre-check + UX for `409 'Username already taken'` |
+| Email max length | `MAX_EMAIL_LENGTH = 254` (RFC 5321) | [`utils/emailBounds.ts`](src/utils/emailBounds.ts) `validateEmail` | mirror in `onesatclient/utils/emailBounds.ts` |
+| Email format | `EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/` | [`utils/emailBounds.ts`](src/utils/emailBounds.ts) `validateEmail` | idem |
+| Email uniqueness (case-insensitive) | — | Prisma `@unique` on lowercased `email` | UX for `409 'Email already registered'` |
 
 `CampaignStatus` values (`draft / ready / published / scheduled / active / paused / ended`) are also shared — the client exports them as a constant, the server currently uses string literals. Keep both vocabularies in sync.
 

@@ -1,6 +1,11 @@
 // NOTE: pour merger cette branche sur master et écraser master
 // https://javaetmoi.com/2013/08/ecraser-une-branche-par-une-autre-avec-git/
 
+// MUST be the very first import — ensures process.env.{DATABASE_URL,REDIS_URL,...}
+// is populated before any module that reads them at top level (datasourcesredis.ts,
+// firebase.ts, prisma client, etc.) gets evaluated.
+import 'dotenv/config'
+
 import { ApolloServer } from '@apollo/server';
 import express from 'express';
 import { expressMiddleware } from '@apollo/server/express4';
@@ -19,7 +24,6 @@ import { permissions } from './permissions.js';
 import { STATUS_CRON_ENABLED } from './config/AppConfig.js';
 import { startCampaignStatusCron } from './jobs/campaignStatusCron.js';
 
-import 'dotenv/config'
 import config from "config";
 console.log(`server started on ${process.env.NODE_ENV} mode`);
 process.env.port = config.get<string>('port');

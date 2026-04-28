@@ -1,10 +1,14 @@
 import { createClient } from 'redis'
 import { Repository, EntityId, EntityKeyName, Entity } from 'redis-om'
-const redisClient = createClient({
-  // host: 'localhost',
-  // port: 6379,
-  password: 'rRTGwNDL7a'
-})
+
+// Connection string lives in REDIS_URL (loaded from .env via dotenv in src/index.ts).
+// Format: redis://default:<password>@localhost:6379  (or rediss:// for TLS in prod).
+// The password is NEVER in code — it's per-environment and gitignored.
+const redisUrl = process.env.REDIS_URL
+if (!redisUrl) {
+  throw new Error('REDIS_URL is not set. Add it to .env (see README "Redis Setup").')
+}
+const redisClient = createClient({ url: redisUrl })
 redisClient.on('error', (err) => console.log('Redis Client Error', err))
 await redisClient.connect()
 const aString = await redisClient.ping()
