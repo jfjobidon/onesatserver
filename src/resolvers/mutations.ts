@@ -293,17 +293,30 @@ const mutations: MutationResolvers = {
     return {...result}
   },
 
+  /**
+   * ## createPoll — server resolver
+   *
+   * Creates a new poll inside an existing campaign. Requires the caller to
+   * be the campaign's author. The datasource enforces all business rules:
+   * parent campaign exists, status is draft/ready, sat bounds inherit from
+   * the campaign, privacy flags can only strengthen (not relax), and the
+   * poll title is unique (case-insensitive) within the campaign.
+   *
+   * See `documentation/specs-for-client/createPoll.spec.md` for the full
+   * client-facing contract.
+   */
   createPoll: async (_, { pollInput }, context): Promise<PollMutationResponse> => {
-    // console.log("create poll")
-    // console.log(context)
+    if (!context.userId) {
+      throw new GraphQLError('Not authenticated', {
+        extensions: { code: 'UNAUTHENTICATED', http: { status: 401 } },
+      })
+    }
     if (!pollInput) {
       throw new GraphQLError('pollInput is required', {
         extensions: { code: 'BAD_USER_INPUT', http: { status: 400 } },
       })
     }
-    let pollMutationResponse = await dataSourcesMongo.createPoll(pollInput)
-    // console.log("createPoll return: ", pollMutationResponse)
-    return pollMutationResponse
+    return await dataSourcesMongo.createPoll(pollInput, context.userId)
   },
 
   createPollOption: async (_, { pollOptionInput }, context): Promise<PollOptionMutationResponse> => {

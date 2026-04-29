@@ -82,6 +82,61 @@ export async function createTestUser(overrides: Partial<{ email: string; userNam
 }
 
 /**
+ * Insert a Campaign owned by `authorUid` and return the persisted document.
+ * Defaults are wide-open (1..100 sats, all flags false, status="draft") so
+ * polls created against it pass the inheritance checks unless the test
+ * explicitly tightens the campaign via `overrides`.
+ *
+ * `authorUid` MUST belong to a User already inserted via createTestUser
+ * (Prisma relation enforces it).
+ */
+export async function createTestCampaign(
+  authorUid: string,
+  overrides: Partial<{
+    title: string
+    description: string
+    status: string
+    minSatPerVote: number
+    maxSatPerVote: number
+    suggestedSatPerVote: number
+    isPrivate: boolean
+    blindAmount: boolean
+    blindRank: boolean
+    blindVote: boolean
+    allowMultipleVotes: boolean
+    paused: boolean
+    startingDate: Date
+    endingDate: Date
+  }> = {},
+): Promise<{ id: string; authorId: string; status: string }> {
+  const now = new Date()
+  const start = overrides.startingDate ?? new Date(now.getTime() + 24 * 60 * 60 * 1000) // +1d
+  const end = overrides.endingDate ?? new Date(start.getTime() + 7 * 24 * 60 * 60 * 1000) // +7d
+  const created = await prismaTest.campaign.create({
+    data: {
+      authorId: authorUid,
+      title: overrides.title ?? `Test Campaign ${Date.now()}`,
+      description: overrides.description ?? 'Created by setup.ts:createTestCampaign',
+      creationDate: now,
+      updatedDate: now,
+      startingDate: start,
+      endingDate: end,
+      minSatPerVote: overrides.minSatPerVote ?? 1,
+      maxSatPerVote: overrides.maxSatPerVote ?? 100,
+      suggestedSatPerVote: overrides.suggestedSatPerVote ?? 5,
+      isPrivate: overrides.isPrivate ?? false,
+      blindAmount: overrides.blindAmount ?? false,
+      blindRank: overrides.blindRank ?? false,
+      blindVote: overrides.blindVote ?? false,
+      allowMultipleVotes: overrides.allowMultipleVotes ?? false,
+      paused: overrides.paused ?? false,
+      status: overrides.status ?? 'draft',
+    },
+  })
+  return { id: created.id, authorId: created.authorId, status: created.status }
+}
+
+/**
  * Wrapper around server.executeOperation that injects an authenticated context.
  * Pass `null` to simulate an unauthenticated request.
  */

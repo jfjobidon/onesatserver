@@ -88,18 +88,22 @@ model Poll {
   author              User         @relation(fields: [authorId], references: [uid])
   authorId            String
   title               String
+  titleLower          String       // lowercased copy — drives per-campaign uniqueness
   description         String
   paused              Boolean      @default(false)
   creationDate        DateTime
   updatedDate         DateTime
-  minSatPerVote       Int // default in config file
-  maxSatPerVote       Int // default in config file
-  suggestedSatPerVote Int // default in config file
+  minSatPerVote       Int // bounded by campaign.minSatPerVote (server-validated)
+  maxSatPerVote       Int // bounded by campaign.maxSatPerVote (server-validated)
+  suggestedSatPerVote Int
   blindAmount         Boolean
   blindRank           Boolean
   blindVote           Boolean
   allowMultipleVotes  Boolean
   pollOptions         PollOption[]
+
+  // No two polls in the same campaign can share a (case-insensitive) title.
+  @@unique([campaignId, titleLower])
 }
 
 model PollOption {

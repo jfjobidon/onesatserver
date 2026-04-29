@@ -363,6 +363,11 @@ Current shared constraints (validators present on both sides):
 | Email max length | `MAX_EMAIL_LENGTH = 254` (RFC 5321) | [`utils/emailBounds.ts`](src/utils/emailBounds.ts) `validateEmail` | mirror in `onesatclient/utils/emailBounds.ts` |
 | Email format | `EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/` | [`utils/emailBounds.ts`](src/utils/emailBounds.ts) `validateEmail` | idem |
 | Email uniqueness (case-insensitive) | — | Prisma `@unique` on lowercased `email` | UX for `409 'Email already registered'` |
+| Poll author = campaign author | — | `createPoll` datasource: `campaign.authorId === context.userId` | hide "Add poll" button for non-authors |
+| Poll allowed only on draft / ready campaign | — | `createPoll` datasource: status check before insert | hide "Add poll" button when campaign status ∉ {draft, ready} |
+| Poll sat bounds inherit from campaign | — | `createPoll` datasource: `campaign.min ≤ poll.min ≤ poll.max ≤ campaign.max` | pre-validate using campaign's min/max in scope |
+| Poll privacy flags can strengthen, not relax | — | `createPoll` datasource: if `campaign.blindX` → poll must be `true`; if `!campaign.allowMultipleVotes` → poll must be `false` | disable the relevant Switch when campaign forces it |
+| Poll title uniqueness (case-insensitive, per-campaign) | — | Prisma composite `@@unique([campaignId, titleLower])` | UX for `409 'A poll with this title already exists in this campaign'` |
 
 `CampaignStatus` values (`draft / ready / published / scheduled / active / paused / ended`) are also shared — the client exports them as a constant, the server currently uses string literals. Keep both vocabularies in sync.
 

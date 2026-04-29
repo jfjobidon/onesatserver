@@ -119,16 +119,15 @@ type PollAll {
 
 input PollInput {
   campaignId: String!
-  authorId: String!
   title: String!
   description: String!
-  minSatPerVote: Int
-  maxSatPerVote: Int
-  suggestedSatPerVote: Int
-  blindAmount: Boolean
-  blindRank: Boolean
-  blindVote: Boolean
-  allowMultipleVotes: Boolean
+  minSatPerVote: Int!
+  maxSatPerVote: Int!
+  suggestedSatPerVote: Int!
+  blindAmount: Boolean!
+  blindRank: Boolean!
+  blindVote: Boolean!
+  allowMultipleVotes: Boolean!
 }
 
 type PollMutationResponse {

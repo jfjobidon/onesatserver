@@ -29,22 +29,11 @@ import {
 
 // const UsersDB: Omit<Required<User>, "__typename">[] = usersData
 
-const minSatPerVoteDefault = config.get<number>('minSatPerVoteDefault')
-const maxSatPerVoteDefault = config.get<number>('maxSatPerVoteDefault')
-const suggestedSatPerVoteDefault = config.get<number>('suggestedSatPerVoteDefault')
+// Only campaignPausedDefault remains used (createCampaign initializes
+// paused from it). All other *Default constants were dropped when
+// createCampaign and createPoll were hardened — every business field is
+// now required server-side, the client owns UX defaults.
 const campaignPausedDefault = config.get<boolean>('campaignPausedDefault')
-const blindAmountDefault = config.get<boolean>('blindAmount')
-const blindRankDefault = config.get<boolean>('blindRank')
-const blindVoteDefault = config.get<boolean>('blindVote')
-const allowMultipleVotesDefault = config.get<boolean>('allowMultipleVotes')
-// console.log("minSatPerVoteDefault " + minSatPerVoteDefault)
-// console.log("maxSatPerVoteDefault " + maxSatPerVoteDefault)
-// console.log("suggestedSatPerVoteDefault " + suggestedSatPerVoteDefault)
-// console.log("campaignPausedDefault " + campaignPausedDefault)
-// console.log("blindAmountDefault " + blindAmountDefault)
-// console.log("blindRankDefault " + blindRankDefault)
-// console.log("blindVoteDefault " + blindVoteDefault)
-// console.log("allowMultipleVotesDefault " + allowMultipleVotesDefault)
 
 // NOTE: Campaign prisma !== Campaign graphQL
 import { Campaign as CampaignMongo, Poll as PollMongo, PollOption as PollOptionMongo, User as UserMongo, PrismaClient } from '@prisma/client'
@@ -787,23 +776,30 @@ export class DataSourcesMongo {
     }
   }
 
-  async createPoll( pollInput: PollInput): Promise<PollMutationResponse> {
+  /**
+   * createPoll — see specs-for-server.md "createPoll" section for the full contract.
+   *
+   * Order of checks (first failure short-circuits):
+   *   1. Format (title, description, sats)
+   *   2. Sat range coherence (min ≤ max, min ≤ suggested ≤ max)
+   *   3. Parent campaign exists
+   *   4. Author check (context.userId === campaign.authorId)
+   *   5. Campaign status (draft or ready)
+   *   6. Sat inheritance (poll bounds within campaign bounds)
+   *   7. Privacy inheritance (poll can strengthen, not relax)
+   *   8. Insert + catch P2002 on (campaignId, titleLower) for title uniqueness
+   */
+  async createPoll(pollInput: PollInput, authorId: string): Promise<PollMutationResponse> {
     const campaignId = pollInput.campaignId
-    const authorId = pollInput.authorId
 
+    // 1. Format validation (text + sats)
     const titleErr = validateTitle(pollInput.title)
     if (titleErr) return { code: "400", success: false, message: titleErr, poll: null }
     const descErr = validateDescription(pollInput.description)
     if (descErr) return { code: "400", success: false, message: descErr, poll: null }
     const title = normalizeText(pollInput.title)
     const description = normalizeText(pollInput.description)
-
-    const pollsBefore = await this.getPollsForCampaign(campaignId)
-    const titleKey = title.toLowerCase()
-    const duplicate = pollsBefore.find(p => normalizeText(p.title).toLowerCase() === titleKey)
-    if (duplicate) {
-      return { code: "400", success: false, message: "A poll with this title already exists in this campaign", poll: null }
-    }
+    const titleLower = title.toLowerCase()
 
     const minErr = validateSatsMin('Minimum', pollInput.minSatPerVote)
     if (minErr) return { code: "400", success: false, message: minErr, poll: null }
@@ -811,135 +807,138 @@ export class DataSourcesMongo {
     if (maxErr) return { code: "400", success: false, message: maxErr, poll: null }
     const suggestedErr = validateSatsMax('Suggested', pollInput.suggestedSatPerVote)
     if (suggestedErr) return { code: "400", success: false, message: suggestedErr, poll: null }
-    if (pollInput.minSatPerVote! > pollInput.maxSatPerVote!) {
+
+    // 2. Sat range coherence (intra-poll)
+    if (pollInput.minSatPerVote > pollInput.maxSatPerVote) {
       return { code: "400", success: false, message: "Minimum sats per vote must be ≤ maximum", poll: null }
     }
-    const sug = pollInput.suggestedSatPerVote!, lo = pollInput.minSatPerVote!, hi = pollInput.maxSatPerVote!
+    const sug = pollInput.suggestedSatPerVote, lo = pollInput.minSatPerVote, hi = pollInput.maxSatPerVote
     if (sug < lo || sug > hi) {
       return { code: "400", success: false, message: `Suggested sats per vote must be between ${lo} and ${hi}`, poll: null }
     }
 
-    const currentCampaign = await this.getCampaign(campaignId)
-    if (!currentCampaign) {
-      return { code: "404", success: false, message: "Parent campaign not found", poll: null }
+    // 3. Parent campaign exists
+    const campaignMongo: CampaignMongo | null = await prisma.campaign.findUnique({ where: { id: campaignId } })
+    if (!campaignMongo) {
+      return { code: "404", success: false, message: "Campaign not found", poll: null }
     }
-    if (pollInput.minSatPerVote !== currentCampaign.minSatPerVote) {
-      return { code: "400", success: false, message: "Poll minimum must equal campaign minimum", poll: null }
+
+    // 4. Author check — caller must be the campaign's author
+    if (campaignMongo.authorId !== authorId) {
+      return { code: "403", success: false, message: "Only the campaign author can add a poll", poll: null }
     }
-    if (pollInput.maxSatPerVote !== currentCampaign.maxSatPerVote) {
-      return { code: "400", success: false, message: "Poll maximum must equal campaign maximum", poll: null }
-    }
-    if (sug < currentCampaign.minSatPerVote! || sug > currentCampaign.maxSatPerVote!) {
+
+    // 5. Campaign status — only mutable while still in draft / ready
+    if (campaignMongo.status !== 'draft' && campaignMongo.status !== 'ready') {
+      // Pick the right article: "an active/ended" vs "a published/paused/scheduled" campaign.
+      const article = /^[aeiou]/i.test(campaignMongo.status) ? 'an' : 'a'
       return {
-        code: "400",
+        code: "409",
         success: false,
-        message: `Suggested must be between ${currentCampaign.minSatPerVote} and ${currentCampaign.maxSatPerVote} (campaign bounds)`,
+        message: `Cannot add a poll to ${article} ${campaignMongo.status} campaign`,
         poll: null,
       }
     }
 
-    // Privacy / voting subordination: a poll can strengthen, never relax.
-    if (currentCampaign.blindAmount && !pollInput.blindAmount) {
-      return { code: "400", success: false, message: "Blind Amount is enforced by the campaign and cannot be disabled at the poll level", poll: null }
+    // 6. Sat inheritance — poll narrows but never widens the campaign range
+    if (pollInput.minSatPerVote < campaignMongo.minSatPerVote) {
+      return {
+        code: "400",
+        success: false,
+        message: `Poll minimum cannot be lower than campaign minimum (${campaignMongo.minSatPerVote})`,
+        poll: null,
+      }
     }
-    if (currentCampaign.blindRank && !pollInput.blindRank) {
-      return { code: "400", success: false, message: "Blind Rank is enforced by the campaign and cannot be disabled at the poll level", poll: null }
-    }
-    if (currentCampaign.blindVote && !pollInput.blindVote) {
-      return { code: "400", success: false, message: "Anonymous Voting is enforced by the campaign and cannot be disabled at the poll level", poll: null }
-    }
-    if (!currentCampaign.allowMultipleVotes && pollInput.allowMultipleVotes) {
-      return { code: "400", success: false, message: "Multiple votes are restricted by the campaign and cannot be enabled at the poll level", poll: null }
+    if (pollInput.maxSatPerVote > campaignMongo.maxSatPerVote) {
+      return {
+        code: "400",
+        success: false,
+        message: `Poll maximum cannot exceed campaign maximum (${campaignMongo.maxSatPerVote})`,
+        poll: null,
+      }
     }
 
-    const minSatPerVote = pollInput.minSatPerVote || minSatPerVoteDefault
-    const maxSatPerVote = pollInput.maxSatPerVote || maxSatPerVoteDefault
-    const suggestedSatPerVote = pollInput.suggestedSatPerVote || suggestedSatPerVoteDefault
-    const blindAmount = pollInput.blindAmount || blindAmountDefault
-    const blindRank = pollInput.blindRank || blindRankDefault
-    const blindVote = pollInput.blindVote || blindVoteDefault
-    const allowMultipleVotes = pollInput.allowMultipleVotes || allowMultipleVotesDefault
+    // 7. Privacy inheritance — a poll can strengthen but never relax
+    if (campaignMongo.blindAmount && !pollInput.blindAmount) {
+      return { code: "400", success: false, message: "Campaign requires blindAmount; poll cannot disable it", poll: null }
+    }
+    if (campaignMongo.blindRank && !pollInput.blindRank) {
+      return { code: "400", success: false, message: "Campaign requires blindRank; poll cannot disable it", poll: null }
+    }
+    if (campaignMongo.blindVote && !pollInput.blindVote) {
+      return { code: "400", success: false, message: "Campaign requires blindVote; poll cannot disable it", poll: null }
+    }
+    if (!campaignMongo.allowMultipleVotes && pollInput.allowMultipleVotes) {
+      return { code: "400", success: false, message: "Campaign disables multiple votes; poll cannot enable them", poll: null }
+    }
+
+    // 8. Insert + catch P2002 (composite unique on campaignId + titleLower)
     const creationDate = new Date()
-    const updatedDate = creationDate
-    // const startingDate = new Date(pollInput.startingDate)
-    // const endingDate = new Date(pollInput.endingDate)
-
-    // pollsBefore is fetched above (uniqueness check) and reused below to find the new pollId
-    console.log("createPoll campaignId", campaignId)
-    console.log("createPoll authorId", authorId)
-
     try {
-      const result = await prisma.campaign.update({
-        where: {
-          id: campaignId,
-        },
+      const created: PollMongo = await prisma.poll.create({
         data: {
-          polls: {
-            createMany: {
-              data: [
-                {
-                  // TODO:
-                  // authorId: authorId.toString(),
-                  // authorId: "66c4b26f8d94b6da2b1fa18d",
-                  authorId: authorId,
-                  title: title,
-                  description: description,
-                  paused: false,
-                  creationDate: creationDate,
-                  updatedDate: creationDate,
-                  minSatPerVote: minSatPerVote,
-                  maxSatPerVote: maxSatPerVote,
-                  suggestedSatPerVote: suggestedSatPerVote,
-                  blindAmount: blindAmount,
-                  blindRank: blindRank,
-                  blindVote: blindVote,
-                  allowMultipleVotes: allowMultipleVotes
-                }
-              ]
-            }
-          }
+          campaignId,
+          authorId,
+          title,
+          titleLower,
+          description,
+          paused: false,
+          creationDate,
+          updatedDate: creationDate,
+          minSatPerVote: pollInput.minSatPerVote,
+          maxSatPerVote: pollInput.maxSatPerVote,
+          suggestedSatPerVote: pollInput.suggestedSatPerVote,
+          blindAmount: pollInput.blindAmount,
+          blindRank: pollInput.blindRank,
+          blindVote: pollInput.blindVote,
+          allowMultipleVotes: pollInput.allowMultipleVotes,
         },
-        include: {
-          polls: true
-        }
       })
-      // extracting new pollId
-      const pollsAfter = await this.getPollsForCampaign(campaignId)
-      let newPollArray = pollsAfter.filter(pollAfter => pollsBefore.every(pollBefore => !(pollBefore.id === pollAfter.id)))
-      const newPollId = newPollArray[0].id
 
+      // Recompute campaign status (draft ↔ ready) since adding a poll may flip readiness.
       await this.recomputeCampaignStatus(campaignId)
 
       return {
         code: "200",
         success: true,
-        message: "poll created!",
+        message: "Poll created!",
         poll: {
-          id: newPollId,
-          campaignId: campaignId,
-          authorId: authorId,
-          title: title,
-          description: description,
-          paused: false,
-          creationDate: creationDate,
-          startingDate: currentCampaign.startingDate,
-          endingDate: currentCampaign.endingDate,
-          updatedDate: updatedDate,
-          minSatPerVote: minSatPerVote,
-          maxSatPerVote: maxSatPerVote,
-          suggestedSatPerVote: suggestedSatPerVote,
-          allowMultipleVotes: allowMultipleVotes,
-          blindAmount: blindAmount,
-          blindRank: blindRank,
-          blindVote: blindVote,
+          id: created.id,
+          campaignId: created.campaignId,
+          authorId: created.authorId,
+          title: created.title,
+          description: created.description,
+          paused: created.paused,
+          creationDate: created.creationDate,
+          // startingDate / endingDate on a Poll surface the parent campaign's window
+          // (polls don't carry their own dates; they live for the campaign duration).
+          startingDate: campaignMongo.startingDate,
+          endingDate: campaignMongo.endingDate,
+          updatedDate: created.updatedDate,
+          minSatPerVote: created.minSatPerVote,
+          maxSatPerVote: created.maxSatPerVote,
+          suggestedSatPerVote: created.suggestedSatPerVote,
+          blindAmount: created.blindAmount,
+          blindRank: created.blindRank,
+          blindVote: created.blindVote,
+          allowMultipleVotes: created.allowMultipleVotes,
           pollOptions: [],
           sats: 0,
+          votes: 0,
           views: 0,
-          votes: 0
         },
       }
-    } catch (err) {
-      console.log("mongo err", err)
+    } catch (err: any) {
+      // Composite unique on (campaignId, titleLower) — Prisma reports P2002.
+      if (err?.code === "P2002") {
+        return {
+          code: "409",
+          success: false,
+          message: "A poll with this title already exists in this campaign",
+          poll: null,
+        }
+      }
+      console.log("createPoll mongo err", err)
       return {
         code: "500",
         success: false,
