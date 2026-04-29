@@ -111,5 +111,9 @@ model PollOption {
   poll        Poll   @relation(fields: [pollId], references: [id])
   pollId      String @db.ObjectId
   title       String
+  titleLower  String
   description String
+
+  // No two options in the same poll can share a (case-insensitive) title.
+  @@unique([pollId, titleLower])
 }

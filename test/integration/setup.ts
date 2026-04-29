@@ -137,6 +137,54 @@ export async function createTestCampaign(
 }
 
 /**
+ * Insert a Poll under `campaignId` owned by `authorUid` and return the persisted
+ * document. Defaults inherit a permissive sat range (1..10) and all flags false
+ * so options created against it pass the parent checks unless overridden.
+ *
+ * `authorUid` MUST be the campaign's authorId (mirrors the production rule:
+ * only the campaign author can add a poll).
+ */
+export async function createTestPoll(
+  campaignId: string,
+  authorUid: string,
+  overrides: Partial<{
+    title: string
+    description: string
+    paused: boolean
+    minSatPerVote: number
+    maxSatPerVote: number
+    suggestedSatPerVote: number
+    blindAmount: boolean
+    blindRank: boolean
+    blindVote: boolean
+    allowMultipleVotes: boolean
+  }> = {},
+): Promise<{ id: string; campaignId: string; authorId: string }> {
+  const now = new Date()
+  const title = overrides.title ?? `Test Poll ${Date.now()}-${Math.random()}`
+  const created = await prismaTest.poll.create({
+    data: {
+      campaignId,
+      authorId: authorUid,
+      title,
+      titleLower: title.toLowerCase(),
+      description: overrides.description ?? 'Created by setup.ts:createTestPoll',
+      paused: overrides.paused ?? false,
+      creationDate: now,
+      updatedDate: now,
+      minSatPerVote: overrides.minSatPerVote ?? 1,
+      maxSatPerVote: overrides.maxSatPerVote ?? 10,
+      suggestedSatPerVote: overrides.suggestedSatPerVote ?? 5,
+      blindAmount: overrides.blindAmount ?? false,
+      blindRank: overrides.blindRank ?? false,
+      blindVote: overrides.blindVote ?? false,
+      allowMultipleVotes: overrides.allowMultipleVotes ?? false,
+    },
+  })
+  return { id: created.id, campaignId: created.campaignId, authorId: created.authorId }
+}
+
+/**
  * Wrapper around server.executeOperation that injects an authenticated context.
  * Pass `null` to simulate an unauthenticated request.
  */

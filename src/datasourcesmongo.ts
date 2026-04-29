@@ -948,74 +948,88 @@ export class DataSourcesMongo {
     }
   }
 
-  // createPollOption(context.userId, pollOptionInput)
-  // FIXME: REVIEW: remove authorId
-  async createPollOption(authorId: String, pollOptionInput: PollOptionInput): Promise<PollOptionMutationResponse> {
-     const pollId = pollOptionInput.pollId
+  async createPollOption(pollOptionInput: PollOptionInput, authorId: string): Promise<PollOptionMutationResponse> {
+    const pollId = pollOptionInput.pollId
 
-     const titleErr = validateTitle(pollOptionInput.title)
-     if (titleErr) return { code: "400", success: false, message: titleErr, pollOption: null }
-     const descErr = validateDescription(pollOptionInput.description)
-     if (descErr) return { code: "400", success: false, message: descErr, pollOption: null }
-     const title = normalizeText(pollOptionInput.title)
-     const description = normalizeText(pollOptionInput.description)
+    // 1. Format validation
+    const titleErr = validateTitle(pollOptionInput.title)
+    if (titleErr) return { code: "400", success: false, message: titleErr, pollOption: null }
+    const descErr = validateDescription(pollOptionInput.description)
+    if (descErr) return { code: "400", success: false, message: descErr, pollOption: null }
+    const title = normalizeText(pollOptionInput.title)
+    const description = normalizeText(pollOptionInput.description)
+    const titleLower = title.toLowerCase()
 
-     const existingOptions = await this.getPollOptionsForPoll(pollId)
-     const titleKey = title.toLowerCase()
-     const duplicate = existingOptions.find(o => normalizeText(o.title).toLowerCase() === titleKey)
-     if (duplicate) {
-       return { code: "400", success: false, message: "An option with this title already exists in this poll", pollOption: null }
-     }
+    // 2. Parent poll exists (also load campaign for ownership + status)
+    const pollMongo = await prisma.poll.findUnique({
+      where: { id: pollId },
+      include: { campaign: true },
+    })
+    if (!pollMongo) {
+      return { code: "404", success: false, message: "Poll not found", pollOption: null }
+    }
 
-     try {
-      const result = await prisma.poll.update({
-        where: {
-          id: pollId
-        },
+    // 3. Author check — caller must be the campaign's author
+    if (pollMongo.campaign.authorId !== authorId) {
+      return { code: "403", success: false, message: "Only the campaign author can add a poll option", pollOption: null }
+    }
+
+    // 4. Campaign status — only mutable while still in draft / ready
+    if (pollMongo.campaign.status !== 'draft' && pollMongo.campaign.status !== 'ready') {
+      const article = /^[aeiou]/i.test(pollMongo.campaign.status) ? 'an' : 'a'
+      return {
+        code: "409",
+        success: false,
+        message: `Cannot add a poll option to ${article} ${pollMongo.campaign.status} campaign`,
+        pollOption: null,
+      }
+    }
+
+    // 5. Insert + 6. Composite unique catch (pollId, titleLower)
+    try {
+      const created = await prisma.pollOption.create({
         data: {
-          pollOptions: {
-            createMany: {
-              data: [
-                {
-                  title: title,
-                  description: description
-                }
-              ]
-            }
-          }
+          pollId,
+          title,
+          titleLower,
+          description,
         },
-        include: {
-          pollOptions: true
-        }
       })
-      const pollOption = result.pollOptions.filter(pollOption => pollOption.title == title)
 
-      await this.recomputeCampaignStatus(result.campaignId)
+      await this.recomputeCampaignStatus(pollMongo.campaignId)
 
       return {
         code: "200",
         success: true,
         message: "poll option created",
         pollOption: {
-          id: pollOption[0].id,
-          pollId: pollId,
-          title: title,
-          description: description,
+          id: created.id,
+          pollId: created.pollId,
+          title: created.title,
+          description: created.description,
           sats: 0,
           votes: 0,
           views: 0,
-          aVotes: []
+          aVotes: [],
+        },
+      }
+    } catch (err: any) {
+      if (err?.code === "P2002") {
+        return {
+          code: "409",
+          success: false,
+          message: "An option with this title already exists in this poll",
+          pollOption: null,
         }
       }
-     } catch (err) {
-      console.log(err)
+      console.log("createPollOption mongo err", err)
       return {
         code: "500",
         success: false,
         message: "Error creating poll option: " + (err as Error).message,
         pollOption: null,
       }
-     }
+    }
   }
 
   async getUserById(id: string): Promise<User> {

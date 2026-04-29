@@ -296,7 +296,7 @@ type PollOption {
 input PollOptionInput {
   pollId: String!
   title: String!
-  description: String 
+  description: String!
 }
 
 type PollOptionMutationResponse {

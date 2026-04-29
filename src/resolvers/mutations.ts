@@ -320,8 +320,6 @@ const mutations: MutationResolvers = {
   },
 
   createPollOption: async (_, { pollOptionInput }, context): Promise<PollOptionMutationResponse> => {
-    console.log("create poll option")
-    console.log(context)
     if (!context.userId) {
       throw new GraphQLError('Not authenticated', {
         extensions: { code: 'UNAUTHENTICATED', http: { status: 401 } },
@@ -332,9 +330,7 @@ const mutations: MutationResolvers = {
         extensions: { code: 'BAD_USER_INPUT', http: { status: 400 } },
       })
     }
-    let pollOption = await dataSourcesMongo.createPollOption(context.userId, pollOptionInput)
-    console.log("createPollOption return: ", pollOption)
-    return pollOption
+    return await dataSourcesMongo.createPollOption(pollOptionInput, context.userId)
   },
 
   togglePausePoll: async (_, { pausePollInput }, context): Promise<PauseMutationResponse> => {

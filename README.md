@@ -368,6 +368,11 @@ Current shared constraints (validators present on both sides):
 | Poll sat bounds inherit from campaign | — | `createPoll` datasource: `campaign.min ≤ poll.min ≤ poll.max ≤ campaign.max` | pre-validate using campaign's min/max in scope |
 | Poll privacy flags can strengthen, not relax | — | `createPoll` datasource: if `campaign.blindX` → poll must be `true`; if `!campaign.allowMultipleVotes` → poll must be `false` | disable the relevant Switch when campaign forces it |
 | Poll title uniqueness (case-insensitive, per-campaign) | — | Prisma composite `@@unique([campaignId, titleLower])` | UX for `409 'A poll with this title already exists in this campaign'` |
+| Poll option title min/max length | `MAX_TITLE_LENGTH = 100` (reused) | [`utils/textBounds.ts`](src/utils/textBounds.ts) `validateTitle` | mirror in client |
+| Poll option description min/max length | `MAX_DESCRIPTION_LENGTH = 1000` (reused) | [`utils/textBounds.ts`](src/utils/textBounds.ts) `validateDescription` | mirror in client |
+| Poll option author = campaign author | — | `createPollOption` datasource: `poll.campaign.authorId === context.userId` | hide "Add option" button for non-authors |
+| Poll option allowed only on draft / ready campaign | — | `createPollOption` datasource: status check before insert | hide "Add option" button when campaign status ∉ {draft, ready} |
+| Poll option title uniqueness (case-insensitive, per-poll) | — | Prisma composite `@@unique([pollId, titleLower])` | UX for `409 'An option with this title already exists in this poll'` |
 
 `CampaignStatus` values (`draft / ready / published / scheduled / active / paused / ended`) are also shared — the client exports them as a constant, the server currently uses string literals. Keep both vocabularies in sync.
 
