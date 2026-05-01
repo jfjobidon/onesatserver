@@ -21,6 +21,7 @@ import { makeExecutableSchema } from '@graphql-tools/schema'
 import { applyMiddleware } from 'graphql-middleware'
 import { readFileSync } from 'fs'
 import { PrismaClient } from '@prisma/client'
+import { createClient } from 'redis'
 
 import resolvers from '../../src/resolvers/index.js'
 
@@ -209,4 +210,111 @@ export function unwrap(response: any): any {
     throw new Error(`Unexpected response kind: ${response.body?.kind}`)
   }
   return response.body.singleResult
+}
+
+/**
+ * Insert a PollOption under `pollId` and return the persisted document.
+ * Default title/description avoid collisions with the per-poll unique index.
+ */
+export async function createTestPollOption(
+  pollId: string,
+  overrides: Partial<{ title: string; description: string }> = {},
+): Promise<{ id: string; pollId: string; title: string }> {
+  const title = overrides.title ?? `Test Option ${Date.now()}-${Math.random()}`
+  const created = await prismaTest.pollOption.create({
+    data: {
+      pollId,
+      title,
+      titleLower: title.toLowerCase(),
+      description: overrides.description ?? 'Created by setup.ts:createTestPollOption',
+    },
+  })
+  return { id: created.id, pollId: created.pollId, title: created.title }
+}
+
+/**
+ * Singleton raw-Redis client for tests. Used to seed counters (`setUserSats`)
+ * and wipe the test DB between tests (`cleanupRedis`). Different from the
+ * redis-om client in `datasourcesredis.ts` so we can reach into the data
+ * structures redis-om manages without going through its abstractions.
+ *
+ * Connects to `process.env.REDIS_URL` (provided by .env.test → port 6380).
+ */
+let cachedRedisClient: ReturnType<typeof createClient> | null = null
+async function getRedisTestClient() {
+  if (cachedRedisClient) return cachedRedisClient
+  const url = process.env.REDIS_URL
+  if (!url) throw new Error('REDIS_URL is not set in .env.test')
+  cachedRedisClient = createClient({ url })
+  cachedRedisClient.on('error', (err) => console.log('Redis test client error', err))
+  await cachedRedisClient.connect()
+  return cachedRedisClient
+}
+
+/**
+ * Wipe Redis data keys (votes, counters, balances) without dropping the
+ * RediSearch indexes that redis-om creates at startup. Using FLUSHDB would
+ * also nuke the indexes — and since redis-om creates them only on the first
+ * import of `datasourcesredis.ts`, FLUSHDB between tests breaks every
+ * subsequent FT.SEARCH ("No such index satsUser:index").
+ *
+ * Strategy: scan and delete keys matching the schemas managed by
+ * `datasourcesredis.ts`, leaving the index metadata intact.
+ */
+const REDIS_DATA_PATTERNS = [
+  'vote:*',
+  'satsPollOption:*',
+  'votesPollOption:*',
+  'viewsPollOption:*',
+  'satsPoll:*',
+  'votesPoll:*',
+  'viewsPoll:*',
+  'satsCampaign:*',
+  'votesCampaign:*',
+  'viewsCampaign:*',
+  'satsUser:*',
+  'userVoted:*',
+  'activity:*',
+]
+
+export async function cleanupRedis(): Promise<void> {
+  const client = await getRedisTestClient()
+  for (const pattern of REDIS_DATA_PATTERNS) {
+    let cursor = 0
+    do {
+      const reply = await client.scan(cursor, { MATCH: pattern, COUNT: 500 })
+      cursor = reply.cursor
+      if (reply.keys.length > 0) {
+        await client.del(reply.keys)
+      }
+    } while (cursor !== 0)
+  }
+}
+
+/**
+ * Seed a user's sat balance directly (bypassing accountFunding).
+ *
+ * redis-om's `satsUser` schema stores the balance as a HASH at key
+ * `satsUser:<entityId>` indexed by `uid`. Tests need a way to set the
+ * balance without going through `accountFunding` (which has its own
+ * validation we're not always testing). We write through redis-om's
+ * convention so the `getSatsBalance` lookup picks it up.
+ */
+export async function setUserSats(uid: string, sats: number): Promise<void> {
+  const client = await getRedisTestClient()
+  // redis-om uses ULIDs as default entity keys. Easiest path: write a key
+  // that satisfies the schema and is found by `search().where('uid')`.
+  const entityId = `test-${uid}-${Date.now()}-${Math.random()}`
+  await client.hSet(`satsUser:${entityId}`, { uid, sats: sats.toString() })
+}
+
+/**
+ * Close the cached Redis test client. Call in `afterAll` to let the test
+ * runner exit cleanly.
+ */
+export async function disconnectRedis(): Promise<void> {
+  if (cachedRedisClient) {
+    await cachedRedisClient.quit()
+    cachedRedisClient = null
+  }
 }

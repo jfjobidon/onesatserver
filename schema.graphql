@@ -60,7 +60,6 @@ type UserMutationResponse {
 }
 
 input FundingInput {
-  userId: String!
   sats: Int!
   invoice: String!
 }
@@ -151,8 +150,6 @@ type Vote {
 }
 
 input VoteInput {
-  uid: String!
-  userName: String!
   invoice: String!
   sats: Int!
   campaignId: String!

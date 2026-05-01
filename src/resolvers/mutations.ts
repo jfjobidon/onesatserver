@@ -27,7 +27,8 @@ import { DataSourcesMongo } from '../datasourcesmongo.js'
 const dataSourcesMongo = new DataSourcesMongo()
 import { responseObject } from '../utils/types'
 import { MAX_SATS_PER_VOTE_CEILING } from '../config/AppConfig.js'
-import randomstring from "randomstring"
+import { PrismaClient } from '@prisma/client'
+const prisma = new PrismaClient()
 
 // check addVote authorisation for user
 //    vérifier multiple votes...
@@ -50,124 +51,125 @@ import randomstring from "randomstring"
 // ? campaign: add field: numberVotes ?
 // createPoll: check if title is unique: same for campaign, pollOption...
 
-const validateVote = async (voteInput: VoteInput): Promise<responseObject> => {
-  // 1) check if voteInput is empty
-  // 2) check if user has enough sats to vote
-  // 3) check campaign parameters: min sat per vote
-  // 4) check campaign parameters: max sat per vote
-  // 5) check poll parameters: paused ?
-  // 6) check campaign parameters: paused ?
-  // 7) check campaign dates: has started
-  // 8) check campaign dates: has ended
-  // 9) TODO: check if double vote
-
-  let response: responseObject = {
-    code: 200,
-    success: true,
-    message: "vote is valid"
+/**
+ * Ordered, fail-fast validation for an addVote attempt.
+ *
+ * Caller passes the authenticated `uid` from `context.userId` — never trust the
+ * client to tell us who is voting. Returns a `responseObject` whose `success`
+ * field is `false` for any rejection; the caller is expected to short-circuit
+ * before writing anything to Redis.
+ *
+ * This is Phase A (sécurité de base) — see documentation/addvote-audit.md and
+ * documentation/acid-lua-redis.md. The cascade in `dataSourcesRedis.addVote`
+ * is still NOT atomic; race conditions on double-vote and balance are
+ * accepted for now and will be closed in Phase B via a Lua script.
+ */
+const validateVote = async (voteInput: VoteInput, uid: string): Promise<responseObject> => {
+  // 1) Format — sats > 0, ids non-empty (the GraphQL `!` guarantees presence,
+  //    but a string can still be empty; check defensively).
+  if (!voteInput.campaignId || !voteInput.pollId || !voteInput.pollOptionId || !voteInput.invoice) {
+    return { code: 400, success: false, message: "vote fields cannot be empty" }
   }
-
-  // 1) check if voteInput is empty
-  const isEmpty: Boolean = Object.values(voteInput).some(x => x === null || x === '')
-  if (isEmpty) {
-    response.message = "vote is empty"
-    console.log(response.message)
-    response.success = false
-    response.code = 400
-  } else {
-    // 2) check if enough sats
-    let user = await dataSourcesMongo.getUserById(voteInput.uid)
-    // TODO: FIXME: get sats from redis
-    let userSats = 1111111
-    let voteInputSats = voteInput.sats
-    if (userSats < voteInputSats) {
-      response.message = `You dont have enough sats to vote: you have ${userSats}, you need ${voteInput.sats}`
-      console.log(response.message)
-      response.success = false
-      response.code = 400
-    } else if (voteInputSats > MAX_SATS_PER_VOTE_CEILING) {
-      response.message = `vote cannot exceed ${MAX_SATS_PER_VOTE_CEILING.toLocaleString()} sats (1 BTC)`
-      console.log(response.message)
-      response.success = false
-      response.code = 400
-    } else {
-      // console.log("enough sats")
-      let campaign = await dataSourcesMongo.getCampaign(voteInput.campaignId)
-      console.table(campaign)
-      // 3) check campaign parameters: min sat per vote
-      if (voteInputSats < campaign.minSatPerVote) {
-        response.message = `vote should be at least ${campaign.minSatPerVote} sats`
-        console.log(response.message)
-        response.success = false
-        response.code = 400
-      } else {
-        // vote has >= minimum sats per vote
-        // 4) check campaign parameters: max sat per vote
-        if (voteInputSats > campaign.maxSatPerVote) {
-          response.message = `vote should be at max ${campaign.maxSatPerVote} sats`
-          console.log(response.message)
-          response.success = false
-          response.code = 400
-        } else {
-          // vote has <= maximum sats per vote
-          // console.log("sats ok for campaign")
-          // 5) check poll parameters: paused ?
-          let poll = await dataSourcesMongo.getPoll(voteInput.pollId)
-          if (poll.paused) {
-            response.message = "Poll is Paused"
-            console.log(response.message)
-            response.success = false
-            response.code = 400
-          } else {
-            // console.log("Campaign is NOT paused")
-            // 6) check campaign parameters: paused ?
-            if (campaign.paused) {
-              response.message = "Campaign is Paused"
-              console.log(response.message)
-              response.success = false
-              response.code = 400
-            } else {
-              // console.log("poll is NOT paused")
-              // 7) check campaign dates: has started
-              let startingDate = campaign.startingDate
-              let endingDate = campaign.endingDate
-              let currentDate = new Date()
-              if (currentDate < startingDate) {
-                response.message = "Campaign has not started yet"
-                console.log(response.message)
-                response.success = false
-                response.code = 400
-              } else {
-                // 8) check campaign dates: has ended
-                if (currentDate > endingDate) {
-                  response.message = "Campaign has ended"
-                  console.log(response.message)
-                  response.success = false
-                  response.code = 400
-                } else {
-                  // 9) check if double vote (allowMultipleVotes)
-                  if (poll.allowMultipleVotes === false) {
-                    const userVotesOnPoll = await dataSourcesRedis.getVotesForPoll(
-                      voteInput.pollId,
-                      voteInput.uid,
-                    )
-                    if (userVotesOnPoll.votes && userVotesOnPoll.votes.length > 0) {
-                      response.message = "You have already voted on this poll"
-                      console.log(response.message)
-                      response.success = false
-                      response.code = 403
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
+  if (!Number.isInteger(voteInput.sats) || voteInput.sats <= 0) {
+    return { code: 400, success: false, message: "sats must be a positive integer" }
+  }
+  if (voteInput.sats > MAX_SATS_PER_VOTE_CEILING) {
+    return {
+      code: 400,
+      success: false,
+      message: `vote cannot exceed ${MAX_SATS_PER_VOTE_CEILING.toLocaleString()} sats (1 BTC)`,
     }
   }
-  // console.log(response.message)
-  return response
+
+  // 2) Balance — read the real Redis balance (no more 1111111 hardcode).
+  const userSats = await dataSourcesRedis.getSatsBalance(uid)
+  if (userSats < voteInput.sats) {
+    return {
+      code: 400,
+      success: false,
+      message: `Insufficient sats: you have ${userSats}, you need ${voteInput.sats}`,
+    }
+  }
+
+  // 3) Parent campaign — must exist, be in a vote-accepting status, not paused.
+  //    Only `active` campaigns accept votes. All other statuses
+  //    (draft / ready / published / paused / ended) are rejected.
+  //    Note: we use prisma.findUnique directly (not dataSourcesMongo.getCampaign)
+  //    because the latter throws when not found instead of returning null.
+  const campaign = await prisma.campaign.findUnique({ where: { id: voteInput.campaignId } })
+  if (!campaign) {
+    return { code: 404, success: false, message: "Campaign not found" }
+  }
+  if (campaign.status !== 'active') {
+    const article = /^[aeiou]/i.test(campaign.status) ? 'an' : 'a'
+    return {
+      code: 409,
+      success: false,
+      message: `Cannot vote on ${article} ${campaign.status} campaign`,
+    }
+  }
+  if (campaign.paused) {
+    return { code: 409, success: false, message: "Campaign is paused" }
+  }
+
+  // 4) Sat range — campaign defines the bounds.
+  if (voteInput.sats < campaign.minSatPerVote) {
+    return {
+      code: 400,
+      success: false,
+      message: `Vote should be at least ${campaign.minSatPerVote} sats`,
+    }
+  }
+  if (voteInput.sats > campaign.maxSatPerVote) {
+    return {
+      code: 400,
+      success: false,
+      message: `Vote should be at most ${campaign.maxSatPerVote} sats`,
+    }
+  }
+
+  // 5) Parent poll — must exist, belong to the campaign, not be paused.
+  const poll = await prisma.poll.findUnique({ where: { id: voteInput.pollId } })
+  if (!poll) {
+    return { code: 404, success: false, message: "Poll not found" }
+  }
+  if (poll.campaignId !== voteInput.campaignId) {
+    return { code: 400, success: false, message: "Poll does not belong to the given campaign" }
+  }
+  if (poll.paused) {
+    return { code: 409, success: false, message: "Poll is paused" }
+  }
+
+  // 6) PollOption — must exist and belong to the poll.
+  const pollOption = await prisma.pollOption.findUnique({ where: { id: voteInput.pollOptionId } })
+  if (!pollOption) {
+    return { code: 404, success: false, message: "Poll option not found" }
+  }
+  if (pollOption.pollId !== voteInput.pollId) {
+    return { code: 400, success: false, message: "Poll option does not belong to the given poll" }
+  }
+
+  // 7) Date window.
+  const now = new Date()
+  if (now < new Date(campaign.startingDate)) {
+    return { code: 409, success: false, message: "Campaign has not started yet" }
+  }
+  if (now > new Date(campaign.endingDate)) {
+    return { code: 409, success: false, message: "Campaign has ended" }
+  }
+
+  // 8) Double-vote — only when the poll forbids multiple votes.
+  //    NOTE (Phase A): this read+write is non-atomic. Two parallel calls can
+  //    both pass this check before either inserts, leading to a duplicate.
+  //    Phase B will move this into the Lua script.
+  if (poll.allowMultipleVotes === false) {
+    const userVotesOnPoll = await dataSourcesRedis.getVotesForPoll(voteInput.pollId, uid)
+    if (userVotesOnPoll.votes && userVotesOnPoll.votes.length > 0) {
+      return { code: 409, success: false, message: "You have already voted on this poll" }
+    }
+  }
+
+  return { code: 200, success: true, message: "vote is valid" }
 }
 
 // Use the generated `MutationResolvers` type to type check our mutations!
@@ -230,9 +232,19 @@ const mutations: MutationResolvers = {
     }
   },
 
+  /**
+   * ## accountFunding — server resolver (Phase 1 dev)
+   *
+   * Recharges the authenticated user's sat balance. The voter is **always**
+   * `context.userId` — the input no longer carries `userId`.
+   *
+   * Datasource enforces: `invoice @unique` (409 on dup), positive sats (400),
+   * existing user (404). A Mongo `Funding` row is created and the Redis
+   * `satsUser[uid]` counter is incremented.
+   *
+   * Phase 2 will replace this with a Lightning Network invoice verification.
+   */
   accountFunding: async (_, { fundingInput }, context): Promise<FundingMutationResponse> => {
-    console.log("account funding...")
-    console.table(context)
     if (!context.userId) {
       throw new GraphQLError('Not authenticated', {
         extensions: { code: 'UNAUTHENTICATED', http: { status: 401 } },
@@ -243,9 +255,7 @@ const mutations: MutationResolvers = {
         extensions: { code: 'BAD_USER_INPUT', http: { status: 400 } },
       })
     }
-    let af = await dataSourcesMongo.accountFunding(context.userId, fundingInput)
-    console.log("accountFunding return: ", af)
-    return af
+    return await dataSourcesMongo.accountFunding(context.userId, fundingInput)
   },
 
   /**
@@ -359,34 +369,51 @@ const mutations: MutationResolvers = {
     return campaignStatus
   },
 
-  // (campaignId: String!): pauseMutationResponse
-
-  // TODO: transformer en ACID transaction
-  // addVote: async (_, vote: VoteInput, { dataSources }): Promise<AddVoteMutationResponse>  => {
-  addVote: async (_, { voteInput }): Promise<AddVoteMutationResponse> => {
-    console.log("addVote async mutations...")
-    if (!voteInput) {
-      return { code: 400, success: false, message: "voteInput is required", vote: null }
+  /**
+   * ## addVote — server resolver (Phase A — sécurité de base)
+   *
+   * Records a vote for the authenticated user on a (campaign, poll, pollOption)
+   * triplet. The voter's identity is **always** taken from `context.userId` —
+   * `VoteInput` no longer carries `uid` / `userName`.
+   *
+   * ### What's hardened in Phase A
+   * - Auth check via Firebase token (`context.userId` required).
+   * - `validateVote` reads the real Redis balance (no more `1111111` hardcode).
+   * - Campaign status must be `published` or `active` to accept votes.
+   * - Voter's balance is decremented inside the Redis cascade.
+   *
+   * ### Known Phase A limitation
+   * The Redis cascade (`addVote` in datasourcesredis) is still non-atomic —
+   * a server crash mid-cascade leaves desynchronised counters. Two parallel
+   * votes from the same user on a `!allowMultipleVotes` poll can both pass
+   * the duplicate check. Phase B closes both holes via a Lua script.
+   * See `documentation/acid-lua-redis.md`.
+   */
+  addVote: async (_, { voteInput }, context): Promise<AddVoteMutationResponse> => {
+    if (!context.userId) {
+      throw new GraphQLError('Not authenticated', {
+        extensions: { code: 'UNAUTHENTICATED', http: { status: 401 } },
+      })
     }
-    let responseObject = await validateVote(voteInput)
-    if (responseObject.success) {
-      console.log("VOTE IS VALID")
-      // possibility to filter publish: withFilter
-      let voteResponse = await dataSourcesRedis.addVote(voteInput)
-      console.log("addVote voteResponse")
-      console.table(voteResponse)
-      pubsub.publish('EVENT_VOTEADDED', { voteAdded: voteResponse.vote })
-      return voteResponse
-    } else {
-      console.log("VOTE IS NOT VALID")
-      console.log(responseObject.message)
+    if (!voteInput) {
+      throw new GraphQLError('voteInput is required', {
+        extensions: { code: 'BAD_USER_INPUT', http: { status: 400 } },
+      })
+    }
+    const validation = await validateVote(voteInput, context.userId)
+    if (!validation.success) {
       return {
-        code: responseObject.code,
+        code: validation.code,
         success: false,
-        message: responseObject.message,
-        vote: null
+        message: validation.message,
+        vote: null,
       }
     }
+    const voteResponse = await dataSourcesRedis.addVote(voteInput, context.userId)
+    if (voteResponse.success) {
+      pubsub.publish('EVENT_VOTEADDED', { voteAdded: voteResponse.vote })
+    }
+    return voteResponse
   }
 }
 

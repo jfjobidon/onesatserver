@@ -64,6 +64,11 @@ export const MAX_EMAIL_LENGTH = 254
 // matches what HTML5 `input type="email"` does.
 export const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
+// OSOV platform account — receives the platform's share of the sat split on every vote.
+// The split is `floor(sats/2) + 1` to the campaign author and the rest to OSOV.
+// Centralised here (was hardcoded in datasourcesredis.ts before).
+export const OSOV_USER_ID = "859058920934"
+
 // DEV ONLY — see README TODO #9. Toggle to true to run the campaign-status
 // cron locally during testing (published → active when startingDate reached,
 // active → ended when endingDate passed). In production this flag should be

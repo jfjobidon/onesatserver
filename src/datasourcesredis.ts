@@ -13,7 +13,7 @@ redisClient.on('error', (err) => console.log('Redis Client Error', err))
 await redisClient.connect()
 const aString = await redisClient.ping()
 console.log('redis PING: ', aString)
-const osovId = "859058920934" // TODO: put that in config file FIXME: REVIEW:
+import { OSOV_USER_ID } from './config/AppConfig.js'
 
 import randomstring from "randomstring"
 
@@ -61,44 +61,74 @@ let satsUserRepository = new Repository(satsUserSchema, redisClient)
 await satsUserRepository.createIndex()
 
 export class DataSourcesRedis {
-  // async addVote(uid: string, invoice: string, date: number, campaignId: string, certified: boolean) {
-  async addVote(voteInput: VoteInput): Promise<AddVoteMutationResponse> {
-    // TODO: tester createAndSave
-    const voteCode = randomstring.generate(12) // REVIEW: nanoId ???
-    // console.log(voteCode)
-    console.log("addVote voteInput", voteInput)
-    const currentDate = new Date
-    const vote: Entity = await voteRepository.save({ ...voteInput, voteCode: voteCode, date: currentDate.toString() })
-    console.table(vote)
-    console.log('addVote entityId: ', vote[EntityId])
-    console.log('addVote entityKeyName: ', vote[EntityKeyName])
-    // const exists = await redisClient.exists(`vote:${vote[EntityId]}`)
+  /**
+   * Persist a vote in Redis and update all derived counters.
+   *
+   * Phase A (sécurité de base) — see documentation/acid-lua-redis.md.
+   * The cascade below is **NOT atomic**: if the process dies mid-way,
+   * counters end up desynchronised. Phase B replaces the whole sequence
+   * with a Lua script. The voter's `userName` is fetched from Mongo at
+   * call time (no longer trusted from the client).
+   *
+   * The voter's balance is decremented here via `incrUser(uid, -sats)`.
+   * The campaign-author + OSOV credit happens inside `incrCampaign`.
+   */
+  async addVote(voteInput: VoteInput, uid: string): Promise<AddVoteMutationResponse> {
+    const voteCode = randomstring.generate(12)
+    const currentDate = new Date()
+
+    // Resolve userName + campaign author from Mongo (server-derived — never
+    // trust the client). The campaign author is the recipient of the sat split;
+    // the voter is `uid`. We use Prisma directly instead of the Mongo
+    // datasource methods because those throw on not-found rather than return
+    // null, and we want graceful error responses here.
+    const { PrismaClient } = await import('@prisma/client')
+    const prisma = new PrismaClient()
+    const user = await prisma.user.findUnique({ where: { uid } })
+    if (!user) {
+      return { code: 404, success: false, message: "Voter not found", vote: null }
+    }
+    const campaign = await prisma.campaign.findUnique({ where: { id: voteInput.campaignId } })
+    if (!campaign) {
+      return { code: 404, success: false, message: "Campaign not found", vote: null }
+    }
+
+    const voteData = {
+      uid,
+      userName: user.userName,
+      invoice: voteInput.invoice,
+      sats: voteInput.sats,
+      campaignId: voteInput.campaignId,
+      pollId: voteInput.pollId,
+      pollOptionId: voteInput.pollOptionId,
+      certified: voteInput.certified,
+      voteCode,
+      date: currentDate.toString(),
+    }
+
+    const vote: Entity = await voteRepository.save(voteData)
     const entityKey = vote[EntityKeyName]
     if (!entityKey) {
       return { code: 500, success: false, message: "Vote saved but no entity key returned by Redis", vote: null }
     }
     const exists = await redisClient.exists(entityKey)
-    if (exists) {
-      // REVIEW: quoi faire si return false ???
-      await this.incrPollOption(voteInput.pollOptionId, voteInput.sats)
-      await this.incrPoll(voteInput.pollId, voteInput.sats)
-      await this.incrCampaign(voteInput.campaignId, voteInput.uid, voteInput.sats)
-      await this.addUserVoted(voteInput.uid, voteInput.campaignId)
-      // incrUser(voteInput.uid, voteInput.sats) --> Done in incrCampaign
-      // redis SET anotherkey "will expire in a minute" EX 60
-      return {
-        code: 200,
-        success: true,
-        message: "New vote added!",
-        vote: Object(vote), // vote is of type Symbol
-      }
-    } else {
-      return {
-        code: 500,
-        success: false,
-        message: "Problem adding new vote!",
-        vote: null
-      }
+    if (!exists) {
+      return { code: 500, success: false, message: "Problem adding new vote!", vote: null }
+    }
+
+    // Cascade: decrement voter balance, increment all aggregates, mark voted.
+    // `incrCampaign` also credits the campaign author + OSOV (sat split).
+    await this.incrUser(uid, -voteInput.sats)
+    await this.incrPollOption(voteInput.pollOptionId, voteInput.sats)
+    await this.incrPoll(voteInput.pollId, voteInput.sats)
+    await this.incrCampaign(voteInput.campaignId, campaign.authorId, voteInput.sats)
+    await this.addUserVoted(uid, voteInput.campaignId)
+
+    return {
+      code: 200,
+      success: true,
+      message: "New vote added!",
+      vote: Object(vote),
     }
   }
 
@@ -358,35 +388,38 @@ export class DataSourcesRedis {
     return true
   }
 
-  async incrCampaign(campaignId: string, uid: string, sats: number): Promise<Boolean> {
+  /**
+   * Increment campaign aggregates and credit the campaign author + OSOV.
+   *
+   * The sat split is `floor(totalSats/2) + 1` to the author, the rest to OSOV.
+   * Because the +1 tiebreak depends on the running total, the per-vote delta
+   * is computed as `after - before` (not just `floor(sats/2) + 1`), keeping
+   * the running invariant `authorBalance + osovBalance = campaignTotal`.
+   *
+   * `authorId` is the **campaign author's** uid — not the voter's. Earlier
+   * code passed the voter's uid here, which was a silent bug (voters were
+   * crediting themselves).
+   */
+  async incrCampaign(campaignId: string, authorId: string, sats: number): Promise<Boolean> {
     try {
-      // console.log(campaignId)
-      // increments sats for Campaign
       const satsCampaign: Entity[] = await satsCampaignRepository.search().where('campaignId').equals(campaignId).return.all()
-      // console.log(satsCampaign)
-      let satsUser: number  // sats won by user
-      let satsOSOV: number  // sat won by me
+      let satsUser: number  // sats credited to the campaign author
+      let satsOSOV: number  // sats credited to the OSOV platform account
       if (satsCampaign.length == 0) {
-        // console.log("campaign empty")
-        // compute the gain of the user and osov
         satsUser = Math.floor(sats / 2) + 1
         satsOSOV = sats - satsUser
-        this.incrUser(uid, satsUser)
-        this.incrUser(osovId, satsOSOV)
-        const campaign2: Entity = await satsCampaignRepository.save({ "campaignId": campaignId, sats: sats })
-        // console.log(campaign2)
+        this.incrUser(authorId, satsUser)
+        this.incrUser(OSOV_USER_ID, satsOSOV)
+        await satsCampaignRepository.save({ "campaignId": campaignId, sats: sats })
       } else {
-        // before
         let beforeSatsCampaign = parseInt(satsCampaign[0].sats!.toString())
         const beforeSatsUser = Math.floor(beforeSatsCampaign / 2) + 1
         const beforeSatsOSOV = beforeSatsCampaign - beforeSatsUser
-        // after
-        // compute the gain of the user and osov
         const afterSatsCampaign = beforeSatsCampaign + sats
         const afterSatsUser = Math.floor(afterSatsCampaign / 2) + 1
         const afterSatsOSOV = afterSatsCampaign - afterSatsUser
-        this.incrUser(uid, afterSatsUser - beforeSatsUser)
-        this.incrUser(osovId, afterSatsOSOV - beforeSatsOSOV)
+        this.incrUser(authorId, afterSatsUser - beforeSatsUser)
+        this.incrUser(OSOV_USER_ID, afterSatsOSOV - beforeSatsOSOV)
 
         satsCampaign[0].sats = (sats + beforeSatsCampaign)
         satsCampaignRepository.save(satsCampaign[0])

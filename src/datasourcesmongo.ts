@@ -52,48 +52,73 @@ const prisma = new PrismaClient()
 
 export class DataSourcesMongo {
 
+  /**
+   * Phase 1 (dev) — recharge le solde sats de l'utilisateur authentifié
+   * sans vérification Lightning Network. Le client envoie juste `{ invoice, sats }`,
+   * le serveur dérive l'utilisateur de `context.userId`.
+   *
+   * Ordre des checks :
+   *   1. Format — `sats` entier strictement positif, `invoice` non vide.
+   *   2. Création du Funding (Mongo) — catch P2002 sur `invoice @unique`.
+   *   3. Incrément du solde Redis (`satsUser[uid] += sats`).
+   *
+   * À noter : si l'incrément Redis échoue après le commit Mongo, on a une
+   * désync (Funding existe mais solde Redis pas mis à jour). Phase 2
+   * remplacera par un message queue + worker idempotent.
+   */
   async accountFunding(uid: string, fundingInput: FundingInput): Promise<FundingMutationResponse> {
+    if (!Number.isInteger(fundingInput.sats) || fundingInput.sats <= 0) {
+      return { code: "400", success: false, message: "sats must be a positive integer", funding: null }
+    }
+    if (!fundingInput.invoice || fundingInput.invoice.trim() === '') {
+      return { code: "400", success: false, message: "invoice is required", funding: null }
+    }
+
+    const date = new Date()
     try {
-      const result = await prisma.user.update({
-        where: {
-          uid: uid
-        },
+      await prisma.user.update({
+        where: { uid },
         data: {
           fundings: {
             createMany: {
-              data: [
-                {
-                  invoice: fundingInput.invoice,
-                  sats: fundingInput.sats,
-                }
-              ]
-            }
-          }
+              data: [{ invoice: fundingInput.invoice, sats: fundingInput.sats, date }],
+            },
+          },
         },
-        include: {
-          fundings: true
-        }
       })
-      await dataSourcesRedis.incrUser(uid, fundingInput.sats)
-      return {
-        code: "200",
-        success: true,
-        message: "funding done",
-        funding: {
-          userId: uid,
-          invoice: fundingInput.invoice,
-          sats: fundingInput.sats,
-          date: result.creationDate
+    } catch (err: any) {
+      if (err?.code === 'P2002') {
+        return {
+          code: "409",
+          success: false,
+          message: "This invoice has already been used",
+          funding: null,
         }
       }
-    } catch(err) {
-      console.log(err)
+      if (err?.code === 'P2025') {
+        return { code: "404", success: false, message: "User not found", funding: null }
+      }
+      console.log("accountFunding mongo err", err)
       return {
         code: "500",
         success: false,
         message: (err as Error)?.message || "funding failed",
-        funding: null
+        funding: null,
       }
+    }
+
+    await dataSourcesRedis.incrUser(uid, fundingInput.sats)
+
+    return {
+      code: "200",
+      success: true,
+      message: "funding done",
+      funding: {
+        userId: uid,
+        invoice: fundingInput.invoice,
+        sats: fundingInput.sats,
+        date,
+      },
     }
   }
 
