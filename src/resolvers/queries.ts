@@ -122,6 +122,25 @@ const queries: QueryResolvers = {
     return campaignAll
   },
 
+  /**
+   * Returns the settlement snapshot for a campaign once it has ended.
+   *
+   * The snapshot is built ONCE by the status cron at settlement time
+   * (see `documentation/end-of-campaign-results.md`) and stored on
+   * `Campaign.results` (Json). This resolver just deserializes it —
+   * O(1) read, no Redis aggregation.
+   *
+   * Returns `null` if:
+   *   - Campaign doesn't exist
+   *   - Campaign hasn't been settled yet (`settledAt IS NULL`)
+   *
+   * Public — no auth required (campaign results are public information).
+   */
+  getCampaignResults: async (_, args) => {
+    if (!args.campaignId) return null
+    return await dataSourcesMongo.getCampaignResults(args.campaignId)
+  },
+
   getCampaignsVoted: async (_, args): Promise<GetVotedQueryResponse> => {
     // Get the array of campaignIds that the user has voted for
     console.log("111111")

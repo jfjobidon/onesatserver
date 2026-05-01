@@ -45,10 +45,14 @@ model Campaign {
   blindVote           Boolean
   allowMultipleVotes  Boolean
   paused              Boolean  @default(false) // emergency pause only
-  status              String   @default("draft") // draft, ready, published, ended
+  status              String   @default("draft") // draft, ready, published, active, ended
+  // Settlement metadata — set when the campaign transitions from active to
+  // ended. `settledAt = null` means "not yet settled" (used by the cron to
+  // find candidates and to guarantee idempotence). `results` is a JSON
+  // snapshot of the final tallies — see documentation/end-of-campaign-results.md.
+  settledAt           DateTime?
+  results             Json?
   polls               Poll[]
-  // updatedAt DateTime @updatedAt
-  // xyz      String @unique @default(uuid())
 }
 
 // data DateTime @default("2020-03-19T14:21:00+02:00")

@@ -327,6 +327,47 @@ type pingResponse {
   pong: String
 }
 
+# ─── Campaign results (settlement snapshot) ─────────────────────────────────
+# These types are populated when a campaign transitions from `active` to
+# `ended` by the status cron (see documentation/end-of-campaign-results.md).
+# Read-only — the full snapshot is computed once and stored in
+# Campaign.results (Json) for O(1) reads.
+
+type PollOptionResults {
+  id: String!
+  title: String!
+  sats: Int!
+  votes: Int!
+  satsPercent: Float!     # sats / poll.totalSats × 100, 1 decimal
+  votesPercent: Float!    # votes / poll.totalVotes × 100, 1 decimal
+  rank: Int!              # 1, 2, 3, … — ties get the same rank
+}
+
+type PollResults {
+  id: String!
+  title: String!
+  totalSats: Int!
+  totalVotes: Int!
+  options: [PollOptionResults!]!
+}
+
+type CampaignResults {
+  settledAt: DateScalar!
+  endingDate: DateScalar!
+  totalSats: Int!
+  totalVotes: Int!
+  totalUniqueVoters: Int!
+  totalViews: Int!
+  satsToAuthor: Int!      # floor(totalSats / 2) + 1
+  satsToOSOV: Int!        # totalSats - satsToAuthor
+  polls: [PollResults!]!
+}
+
+type CampaignSettledEvent {
+  campaignId: String!
+  settledAt: DateScalar!
+}
+
 type Query {
   placeholder: Boolean
   # REVIEW: campaignId Not null (String!) but must provide default value !!!
@@ -356,6 +397,7 @@ type Query {
   getFavorites(uid: String): getFavoritesQueryResponse
   getVoted(uid: String): getVotedQueryResponse
   # login(email: String!, password: String!): UserMutationResponse
+  getCampaignResults(campaignId: String!): CampaignResults
 }
 
 # TODO: ajouter les types inputVote, inputCampaign, inputUser
@@ -376,4 +418,5 @@ type Mutation {
 type Subscription {
   newsFeed: NewsEvent
   voteAdded(campaignId: String!): Vote
+  campaignSettled(campaignId: String!): CampaignSettledEvent
 }

@@ -74,6 +74,24 @@ const subscriptions: SubscriptionResolvers = {
         ) as any,
     },
 
+    /**
+     * Fires when the status cron settles a campaign (active → ended).
+     * Subscribers on a campaign's vote screen use this to switch
+     * automatically to the results screen — no refresh needed.
+     *
+     * Published from `dataSourcesMongo.handleCampaignEnd` via
+     * `pubsub.publish('EVENT_CAMPAIGN_SETTLED', { campaignSettled: { campaignId, settledAt } })`.
+     *
+     * Filtered server-side by campaignId so each subscriber only
+     * receives the settlement event for the campaign they're watching.
+     */
+    campaignSettled: {
+        subscribe: withFilter(
+            () => pubsub.asyncIterator('EVENT_CAMPAIGN_SETTLED') as any,
+            (payload, variables) => payload?.campaignSettled?.campaignId === variables.campaignId
+        ) as any,
+    },
+
     // voteAdded: {
     //     subscribe: () => ({
     //       [Symbol.asyncIterator]: withFilter(

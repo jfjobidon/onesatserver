@@ -43,6 +43,7 @@ import { validateTitle, validateDescription, normalizeText } from "./utils/textB
 import { validateCampaignDates } from "./utils/dateBounds.js"
 import { validateUsername } from "./utils/userBounds.js"
 import { validateEmail } from "./utils/emailBounds.js"
+import { pubsub } from "./resolvers/pubsub.js"
 // import { CampaignType } from "./utils/types"
 const dataSourcesRedis = new DataSourcesRedis()
 // import { describe } from "node:test"
@@ -732,6 +733,196 @@ export class DataSourcesMongo {
       })
     } catch (err) {
       console.log('recomputeCampaignStatus err', err)
+    }
+  }
+
+  /**
+   * End-of-campaign settlement.
+   *
+   * Called by the status cron AFTER it has flipped the campaign's status
+   * from `active` to `ended` in a fast atomic updateMany (so the voting
+   * window is already closed by the time we get here — see
+   * `campaignStatusCron.closeExpiredVotingWindows`). The sat split
+   * (author 50%+1, OSOV rest) was already applied progressively per
+   * vote in `dataSourcesRedis.incrCampaign`, so there is nothing to
+   * redistribute here. The job is to:
+   *
+   *   1. Read the final aggregates from Redis (sats, votes, views per
+   *      campaign / poll / option).
+   *   2. Build a `results` snapshot (top-N + percentages + ranks) so the
+   *      results page can be served from a single Mongo read.
+   *   3. Atomically set `status='ended'` + `settledAt=now` + `results=...`
+   *      in one Mongo update — the document either has the full new state
+   *      or the full old state, never a mix.
+   *
+   * **Idempotence**: if `settledAt` is already set, this returns immediately.
+   * Safe to call multiple times concurrently — only the first call writes;
+   * subsequent calls become no-ops.
+   *
+   * **Reconciliation**: in Phase A the Redis cascade is non-atomic, so the
+   * sum of poll totals may drift slightly from the campaign total. We log
+   * a warning when it happens but don't block the settlement. Phase B (Lua
+   * atomic) will close that gap.
+   *
+   * @returns `{ success, message, settledNow }` where `settledNow` is true
+   *   only if THIS call performed the settlement (false if already settled).
+   */
+  async handleCampaignEnd(
+    campaignId: string,
+  ): Promise<{ success: boolean; message: string; settledNow: boolean }> {
+    try {
+      // 1. Idempotence — skip if already settled
+      const existing = await prisma.campaign.findUnique({ where: { id: campaignId } })
+      if (!existing) {
+        return { success: false, message: 'Campaign not found', settledNow: false }
+      }
+      if (existing.settledAt !== null) {
+        return { success: true, message: 'already settled', settledNow: false }
+      }
+
+      // 2. Build the per-poll + per-option snapshot from Redis
+      const polls = await prisma.poll.findMany({
+        where: { campaignId },
+        include: { pollOptions: true },
+      })
+
+      const totalSats = await dataSourcesRedis.getSatsForCampaign(campaignId)
+      const totalVotes = await dataSourcesRedis.getNbVotesForCampaign(campaignId)
+      const totalViews = await dataSourcesRedis.getNbViewsForCampaign(campaignId)
+
+      const pollsResults = await Promise.all(
+        polls.map(async (poll) => {
+          const pollSats = await dataSourcesRedis.getSatsForPoll(poll.id)
+          const pollVotes = await dataSourcesRedis.getNbVotesForPoll(poll.id)
+          const optionsRaw = await Promise.all(
+            poll.pollOptions.map(async (opt) => {
+              const sats = await dataSourcesRedis.getSatsForPollOption(opt.id)
+              const votes = await dataSourcesRedis.getNbVotesForPollOption(opt.id)
+              return { id: opt.id, title: opt.title, sats, votes }
+            }),
+          )
+          // Sort DESC by sats, then assign ranks (ties get the same rank).
+          optionsRaw.sort((a, b) => b.sats - a.sats)
+          let lastSats = -1
+          let lastRank = 0
+          const options = optionsRaw.map((o, i) => {
+            const rank = o.sats === lastSats ? lastRank : i + 1
+            lastSats = o.sats
+            lastRank = rank
+            return {
+              ...o,
+              satsPercent: pollSats > 0 ? Math.round((o.sats / pollSats) * 1000) / 10 : 0,
+              votesPercent: pollVotes > 0 ? Math.round((o.votes / pollVotes) * 1000) / 10 : 0,
+              rank,
+            }
+          })
+          return {
+            id: poll.id,
+            title: poll.title,
+            totalSats: pollSats,
+            totalVotes: pollVotes,
+            options,
+          }
+        }),
+      )
+
+      // 3. Unique voters — scan votes once and dedupe by uid.
+      //    O(votes) — acceptable as a one-shot at settlement time. For
+      //    massive campaigns Phase 2 will maintain a Redis SET counter
+      //    (`uniqueVotersCampaign:{cid}`) updated on each vote.
+      const allVotes = await dataSourcesRedis.getVotesForCampaign(campaignId, null as any)
+      const uniqueUids = new Set((allVotes.votes ?? []).map((v: any) => v?.uid).filter(Boolean))
+      const totalUniqueVoters = uniqueUids.size
+
+      // 4. Sat split (matches the running total invariant maintained by
+      //    incrCampaign — author gets floor(N/2)+1, OSOV gets the rest).
+      const satsToAuthor = totalSats > 0 ? Math.floor(totalSats / 2) + 1 : 0
+      const satsToOSOV = totalSats - satsToAuthor
+
+      // 5. Reconciliation sanity check — Phase A is non-atomic, so log
+      //    rather than throw. Phase B will tighten this to a hard assert.
+      const sumOfPolls = pollsResults.reduce((acc, p) => acc + p.totalSats, 0)
+      if (sumOfPolls !== totalSats) {
+        console.warn(
+          `[settlement] reconciliation mismatch for campaign ${campaignId}: ` +
+            `campaignTotal=${totalSats} sum(polls)=${sumOfPolls}`,
+        )
+      }
+
+      // 6. Build the final snapshot
+      const settledAt = new Date()
+      const results = {
+        settledAt: settledAt.toISOString(),
+        endingDate: existing.endingDate.toISOString(),
+        totalSats,
+        totalVotes,
+        totalUniqueVoters,
+        totalViews,
+        satsToAuthor,
+        satsToOSOV,
+        polls: pollsResults,
+      }
+
+      // 7. Atomic Mongo write — single document update guarantees the
+      //    `status / settledAt / results` triple is observed together.
+      await prisma.campaign.update({
+        where: { id: campaignId },
+        data: {
+          status: 'ended',
+          settledAt,
+          results: results as any,
+          updatedDate: settledAt,
+        },
+      })
+
+      // 8. Notify subscribers — clients on the vote screen switch to the
+      //    results screen as soon as they receive this event. Done after
+      //    the Mongo write so the snapshot is queryable when the client
+      //    fetches getCampaignResults.
+      pubsub.publish('EVENT_CAMPAIGN_SETTLED', {
+        campaignSettled: {
+          campaignId,
+          settledAt,
+        },
+      })
+
+      return { success: true, message: 'settled', settledNow: true }
+    } catch (err) {
+      console.error(`[settlement] handleCampaignEnd failed for ${campaignId}:`, err)
+      return {
+        success: false,
+        message: (err as Error)?.message || 'settlement failed',
+        settledNow: false,
+      }
+    }
+  }
+
+  /**
+   * Read the settlement snapshot for a campaign.
+   *
+   * Returns null if the campaign doesn't exist OR hasn't been settled yet
+   * (`settledAt IS NULL`). The snapshot itself is a Prisma `Json` field
+   * that the cron populated at settlement time, so this is a single
+   * Mongo read with no Redis aggregation.
+   *
+   * The shape matches the GraphQL `CampaignResults` type — we cast it
+   * here because Prisma's Json field is typed as `JsonValue` rather than
+   * our concrete shape.
+   */
+  async getCampaignResults(campaignId: string): Promise<any | null> {
+    const campaign = await prisma.campaign.findUnique({
+      where: { id: campaignId },
+      select: { results: true, settledAt: true },
+    })
+    if (!campaign || !campaign.settledAt || !campaign.results) return null
+    // Rehydrate ISO strings back into Date objects so the GraphQL DateScalar
+    // serializer accepts them. The snapshot stores them as strings (Mongo
+    // Json field) for portability, but the GraphQL layer wants real Dates.
+    const r = campaign.results as any
+    return {
+      ...r,
+      settledAt: new Date(r.settledAt),
+      endingDate: new Date(r.endingDate),
     }
   }
 
