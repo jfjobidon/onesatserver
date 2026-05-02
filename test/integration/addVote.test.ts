@@ -75,6 +75,8 @@ async function setupVotingScenario(overrides: {
   voterBalance?: number
   campaignMin?: number
   campaignMax?: number
+  startingDate?: Date
+  endingDate?: Date
 } = {}) {
   const author = await createTestUser()
   const voter = await createTestUser()
@@ -85,8 +87,8 @@ async function setupVotingScenario(overrides: {
     minSatPerVote: overrides.campaignMin ?? 1,
     maxSatPerVote: overrides.campaignMax ?? 100,
     suggestedSatPerVote: 5,
-    startingDate: new Date(now.getTime() - 60 * 60 * 1000),       // -1h
-    endingDate: new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000), // +7d
+    startingDate: overrides.startingDate ?? new Date(now.getTime() - 60 * 60 * 1000),       // -1h
+    endingDate: overrides.endingDate ?? new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000),  // +7d
   })
   const poll = await createTestPoll(campaign.id, author.uid, {
     paused: overrides.pollPaused ?? false,
@@ -211,9 +213,38 @@ describe('addVote mutation (integration, Phase A)', () => {
     expect(result.data.addVote.message).toMatch(/Cannot vote on a draft campaign/)
   })
 
-  // 6b. Campaign published (scheduled, not yet active) → rejected
-  it('rejects votes on a published (not yet active) campaign with 409', async () => {
-    const { voter, campaign, poll, option } = await setupVotingScenario({ campaignStatus: 'published' })
+  // 6b. Slow path — published campaign INSIDE the window (cron not yet run).
+  //     This used to be rejected; now isCampaignAcceptingVotes accepts it
+  //     because once startingDate has passed, the cron is "owed" a flip
+  //     to active and we don't penalise voters for the cron's 60s tick.
+  it('accepts votes on a published campaign that is inside its date window (slow path)', async () => {
+    const now = new Date()
+    const { voter, campaign, poll, option } = await setupVotingScenario({
+      campaignStatus: 'published',
+      startingDate: new Date(now.getTime() - 60 * 60 * 1000),       // -1h, past
+      endingDate: new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000), // +7d
+    })
+    const res = await executeAsUser(
+      server,
+      ADD_VOTE,
+      { voteInput: validInput(campaign.id, poll.id, option.id, { sats: 5 }) },
+      voter.uid,
+    )
+    const result = unwrap(res)
+    expect(result.errors).toBeUndefined()
+    expect(result.data.addVote.code).toBe(200)
+    expect(result.data.addVote.success).toBe(true)
+  })
+
+  // 6c. Slow path edge — published campaign BEFORE startingDate (genuinely
+  //     not yet started). Should be rejected with the start-date message.
+  it('rejects votes on a published campaign before its startingDate', async () => {
+    const now = new Date()
+    const { voter, campaign, poll, option } = await setupVotingScenario({
+      campaignStatus: 'published',
+      startingDate: new Date(now.getTime() + 60 * 60 * 1000),       // +1h, future
+      endingDate: new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000), // +7d
+    })
     const res = await executeAsUser(
       server,
       ADD_VOTE,
@@ -222,7 +253,27 @@ describe('addVote mutation (integration, Phase A)', () => {
     )
     const result = unwrap(res)
     expect(result.data.addVote.code).toBe(409)
-    expect(result.data.addVote.message).toMatch(/Cannot vote on a published campaign/)
+    expect(result.data.addVote.message).toBe('Campaign has not started yet')
+  })
+
+  // 6d. Fast path edge — active campaign whose endingDate has passed
+  //     (cron-not-yet-run on the END side). Should reject with "ended".
+  it('rejects votes on an active campaign whose endingDate has passed (cron not yet run)', async () => {
+    const now = new Date()
+    const { voter, campaign, poll, option } = await setupVotingScenario({
+      campaignStatus: 'active',
+      startingDate: new Date(now.getTime() - 2 * 60 * 60 * 1000), // -2h
+      endingDate: new Date(now.getTime() - 60 * 1000),           // -1min, past
+    })
+    const res = await executeAsUser(
+      server,
+      ADD_VOTE,
+      { voteInput: validInput(campaign.id, poll.id, option.id) },
+      voter.uid,
+    )
+    const result = unwrap(res)
+    expect(result.data.addVote.code).toBe(409)
+    expect(result.data.addVote.message).toBe('Campaign has ended')
   })
 
   // 7. Campaign ended → rejected

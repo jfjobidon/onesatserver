@@ -27,6 +27,7 @@ import { DataSourcesMongo } from '../datasourcesmongo.js'
 const dataSourcesMongo = new DataSourcesMongo()
 import { responseObject } from '../utils/types'
 import { MAX_SATS_PER_VOTE_CEILING } from '../config/AppConfig.js'
+import { isCampaignAcceptingVotes } from '../utils/campaignStatus.js'
 import { PrismaClient } from '@prisma/client'
 const prisma = new PrismaClient()
 
@@ -91,25 +92,40 @@ const validateVote = async (voteInput: VoteInput, uid: string): Promise<response
     }
   }
 
-  // 3) Parent campaign — must exist, be in a vote-accepting status, not paused.
-  //    Only `active` campaigns accept votes. All other statuses
-  //    (draft / ready / published / paused / ended) are rejected.
+  // 3) Parent campaign — must exist and currently accept votes.
+  //    `isCampaignAcceptingVotes` is the single source of truth: it
+  //    handles the fast path (status='active') and the slow path
+  //    (status='published' inside [startingDate, endingDate], for the
+  //    cron-not-yet-run window). See src/utils/campaignStatus.ts.
   //    Note: we use prisma.findUnique directly (not dataSourcesMongo.getCampaign)
   //    because the latter throws when not found instead of returning null.
   const campaign = await prisma.campaign.findUnique({ where: { id: voteInput.campaignId } })
   if (!campaign) {
     return { code: 404, success: false, message: "Campaign not found" }
   }
-  if (campaign.status !== 'active') {
+  const now = new Date()
+  if (!isCampaignAcceptingVotes(campaign, now)) {
+    // Disambiguate the rejection reason for a clearer UX message. The helper
+    // returns a single bool for atomicity / single source of truth, but the
+    // user wants to know WHY they can't vote.
+    if (campaign.paused) {
+      return { code: 409, success: false, message: "Campaign is paused" }
+    }
+    if (campaign.status === 'active' || campaign.status === 'published') {
+      // Date out of window (started/ended). The slow path requires
+      // both bounds; the fast path only checks the upper bound.
+      if (now > new Date(campaign.endingDate)) {
+        return { code: 409, success: false, message: "Campaign has ended" }
+      }
+      return { code: 409, success: false, message: "Campaign has not started yet" }
+    }
+    // draft / ready / ended / unknown
     const article = /^[aeiou]/i.test(campaign.status) ? 'an' : 'a'
     return {
       code: 409,
       success: false,
       message: `Cannot vote on ${article} ${campaign.status} campaign`,
     }
-  }
-  if (campaign.paused) {
-    return { code: 409, success: false, message: "Campaign is paused" }
   }
 
   // 4) Sat range — campaign defines the bounds.
@@ -147,15 +163,6 @@ const validateVote = async (voteInput: VoteInput, uid: string): Promise<response
   }
   if (pollOption.pollId !== voteInput.pollId) {
     return { code: 400, success: false, message: "Poll option does not belong to the given poll" }
-  }
-
-  // 7) Date window.
-  const now = new Date()
-  if (now < new Date(campaign.startingDate)) {
-    return { code: 409, success: false, message: "Campaign has not started yet" }
-  }
-  if (now > new Date(campaign.endingDate)) {
-    return { code: 409, success: false, message: "Campaign has ended" }
   }
 
   // 8) Double-vote — only when the poll forbids multiple votes.
